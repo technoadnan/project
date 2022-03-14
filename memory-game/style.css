@@ -1,0 +1,19 @@
+body {
+  background: #13222f;
+}
+
+.container {
+  display: flex;
+  flex-wrap: wrap;
+  width: 400px;
+  height: 300px;
+  margin: auto;
+
+}
+.heading {
+    text-align: center;
+    font-weight: 800;
+    font-family: monospace;
+    font-size: 28px;
+    color: #fff;
+}
