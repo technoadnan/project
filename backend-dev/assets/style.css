@@ -154,7 +154,7 @@ strong { font-weight: 650; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
 .card h4 { margin: 0 0 4px; font-size: 15.5px; display: flex; align-items: center; gap: 8px; }
 .card p { margin: 0; font-size: 14.5px; color: var(--muted); line-height: 1.55; }
-.card .k { font-family: var(--mono); font-size: 12px; color: var(--accent); background: var(--accent-soft); padding: 1px 7px; border-radius: 6px; }
+.card .k { display: inline-block; font-family: var(--mono); font-size: 12px; color: var(--accent); background: var(--accent-soft); padding: 1px 7px; border-radius: 6px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
 
 table { width: 100%; border-collapse: collapse; font-size: 14.5px; margin: 18px 0; }
@@ -551,3 +551,21 @@ pre mark { background: var(--accent-soft); color: inherit; border-radius: 4px; p
 .cv-line.miss { background: var(--bad-soft); }
 .cv-hit { color: var(--ok); font-weight: 700; }
 .cv-miss { color: var(--bad); font-weight: 700; }
+.tf-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.tf-grid a.card { text-decoration: none; color: inherit; padding: 12px 14px; }
+.tf-grid a.card:hover { border-color: var(--accent); }
+.tf-grid a.card h4 { margin: 2px 0 0; font-size: 14px; }
+.commits { display: flex; justify-content: space-between; position: relative; padding: 22px 18px 18px; min-height: 120px; }
+.commits::before { content: ""; position: absolute; left: 30px; right: 30px; top: 29px; height: 2px; background: var(--border); }
+.commits .c { display: flex; flex-direction: column; align-items: center; gap: 6px; position: relative; font: 13px var(--mono); color: var(--muted); }
+.commits .c i { width: 16px; height: 16px; border-radius: 50%; background: var(--accent); border: 2px solid var(--surface); box-sizing: content-box; }
+.commits .c.local i { background: var(--surface); border: 2px dashed var(--accent); }
+.commits .c b.chip { font-size: 11px; }
+.pf-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 10px; align-items: center; margin: 8px 0; }
+.pf-row b { font: 600 13px var(--mono); }
+.pf-row > div { display: flex; flex-wrap: wrap; gap: 4px; }
+.pf { width: 22px; height: 22px; border-radius: 5px; }
+.pf.web { background: var(--accent); }
+.pf.worker { background: var(--c-queue); }
+.pf.both { width: 44px; background: linear-gradient(90deg, var(--accent) 50%, color-mix(in srgb, var(--c-queue) 40%, var(--surface)) 50%); }
+@media (max-width: 600px) { .commits { padding: 22px 4px 18px; } .commits::before { left: 12px; right: 12px; } .commits .c b.chip { font-size: 9.5px; padding: 1px 4px; } .pf-row { grid-template-columns: 1fr; gap: 4px; } }
