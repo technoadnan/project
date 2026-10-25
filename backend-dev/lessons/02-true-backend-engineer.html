@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The learning path · Backend Dev</title>
+<meta name="description" content="How this series is meant to be learned: principles first, then implementation, then projects.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="02">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 2</span><span>Video · 3:53</span></div>
+  <h1>Walk the path of a true backend engineer</h1>
+  <p class="lead">The series is built in three phases. First the <strong>story and philosophy</strong> of backend systems, then <strong>implementation</strong> in a real language, then <strong>production-grade projects</strong>. Principles come first because they make every later step faster.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>The three phases and what each one gives you</li><li>Why principles come before code</li><li>What "done" looks like at the end of the journey</li></ul></div>
+</div>
+<h2 id="phases">Three phases, in this order</h2>
+<figure class="anim" id="fig-phases">
+  <figcaption class="anim-title">From principles to production</figcaption>
+</figure>
+<div class="cards">
+  <div class="card"><h4><span class="k">1</span> Story &amp; philosophy</h4><p>How the components and machines of a production backend work together. These are the ideas your frameworks hide from you. Language-agnostic.</p></div>
+  <div class="card"><h4><span class="k">2</span> Implementation</h4><p>Each principle rebuilt in a real ecosystem (Node.js and Go). For databases, that means a driver like <code>postgres.js</code> or <code>pgx</code>, plus migrations.</p></div>
+  <div class="card"><h4><span class="k">3</span> Projects</h4><p>End-to-end, production-grade builds that combine everything with industry standards and best practices.</p></div>
+</div>
+
+<h2 id="why">Why principles first?</h2>
+<p>Once you can see the <strong>common patterns</strong> behind every backend, implementation becomes translation: you already know <em>what</em> a good router, validator or repository looks like, and you only need to learn how this language spells it.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>It's like learning to cook. First you learn how heat, salt, fat and acid behave (principles). Then you learn one cuisine's tools and recipes (implementation). Finally you cook full dinners for real guests (projects). Skip the first step and every new recipe feels like starting over.</p></aside>
+
+<h2 id="goal">The finish line</h2>
+<p>Internalise the principles, follow the implementations and build the projects, and you can honestly call yourself a backend engineer: someone who can build systems that</p>
+<ul>
+  <li>start at zero users and grow to a million,</li>
+  <li>other people can maintain for years,</li>
+  <li>you can rebuild in whatever language the job needs.</li>
+</ul>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>Phase 1 (this series) is about the story and philosophy: how things work and why.</li>
+  <li>Phase 2 maps each principle onto a language's ecosystem, so syntax becomes the easy part.</li>
+  <li>Phase 3 combines everything into production-grade projects.</li>
+  <li>The goal is language-agnostic skill: systems that scale and stay maintainable.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Why does the series delay choosing a language?</summary><div><p>Because the patterns are the same in every language. Learning them first turns each language into a translation exercise instead of a fresh start.</p></div></details>
+  <details><summary>What does phase 2 add on top of phase 1?</summary><div><p>Concrete implementation: the same principles expressed with a specific ecosystem's libraries and drivers, such as Postgres with <code>pgx</code> in Go.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.flow("#fig-phases", {
+  w: 720, h: 200,
+  nodes: {
+    p1: { x: 95, y: 100, label: "1. Philosophy", sub: "how & why", kind: "client", w: 150 },
+    p2: { x: 290, y: 100, label: "2. Implementation", sub: "Node.js · Go", kind: "server", w: 160 },
+    p3: { x: 485, y: 100, label: "3. Projects", sub: "production-grade", kind: "cache", w: 150 },
+    you: { x: 645, y: 100, label: "Backend\nengineer", kind: "db", w: 120, h: 62, shape: "pill" }
+  },
+  edges: [["p1", "p2"], ["p2", "p3"], ["p3", "you"]],
+  steps: [
+    { path: ["p1"], hl: ["p1"], note: "<b>Story and philosophy:</b> what the big pieces are, how they collaborate, and why they're designed that way." },
+    { path: ["p1", "p2"], hl: ["p2"], note: "<b>Implementation:</b> each principle rebuilt in a real language and its libraries." },
+    { path: ["p2", "p3"], hl: ["p3"], note: "<b>Projects:</b> everything combined into end-to-end systems with industry practices." },
+    { path: ["p3", "you"], tone: "ok", ok: ["you"], note: "The result: you can build systems that scale from zero to a million users, in any language." }
+  ]
+});
+</script>
+</body>
+</html>
