@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backend roadmap · Backend Dev</title>
+<meta name="description" content="The map of everything a backend engineer deals with, from the browser to production.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="01">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 1</span><span>Video · 31:24</span></div>
+  <h1>Roadmap for backend from first principles</h1>
+  <p class="lead">Backend engineering is much more than writing CRUD APIs. It's building systems that stay <strong>reliable, scalable, fault-tolerant and maintainable</strong>. This lesson is the map: every later lesson is one stop along a request's journey, or one of the things that keeps that journey safe in production.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>What "backend engineering" actually covers</li><li>Why learning through one framework leaves blind spots</li><li>The path a request takes, and which lesson covers each stop</li><li>The production concerns that surround every request</li></ul></div>
+</div>
+<h2 id="what">More than CRUD</h2>
+<p>Most people learn backend through a course or bootcamp, then patch the gaps for years by trial and error. The result is knowledge that works but has holes. A first-principles roadmap fills those holes in a deliberate order.</p>
+<div class="cards c4">
+  <div class="card"><h4><span class="dot" style="background:var(--ok)"></span>Reliable</h4><p>Gives the right answer every time, even under odd inputs.</p></div>
+  <div class="card"><h4><span class="dot" style="background:var(--accent)"></span>Scalable</h4><p>Handles 10× the users without a rewrite.</p></div>
+  <div class="card"><h4><span class="dot" style="background:var(--warn)"></span>Fault-tolerant</h4><p>When a part breaks, the whole thing doesn't.</p></div>
+  <div class="card"><h4><span class="dot" style="background:var(--c-cache)"></span>Maintainable</h4><p>The next engineer can change it without fear.</p></div>
+</div>
+
+<h2 id="lens">The framework lens problem</h2>
+<p>If you learn backend <em>as</em> Express, Spring Boot or Rails, you see every problem through that one ecosystem. Now imagine your company moves from Rails to Go for performance. How much of what you know comes with you?</p>
+<p>If you understand the systems underneath (HTTP, routing, serialization, databases), almost all of it does. If you only know the framework's API, very little.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>Learning one framework is like memorising the dashboard of one car. Learning first principles is learning to <strong>drive</strong>: steering, braking and the rules of the road. After that, any car is just a new layout of buttons.</p></aside>
+
+<h2 id="journey">The map: one request, every lesson</h2>
+<p>Almost everything in this course sits somewhere on the path below. Press play and follow a request from the browser to the database and back. The numbers are lessons.</p>
+<figure class="anim" id="fig-journey">
+  <figcaption class="anim-title">Where each topic lives on a request's path</figcaption>
+</figure>
+<p>The server side of that path breaks into three layers you'll meet again and again:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Layer</th><th>Contains</th><th>Job</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Presentation</strong></td><td>Routing, middleware, validation, controllers</td><td>Accept the user's data and send data back.</td></tr>
+    <tr><td><strong>Business logic</strong></td><td>Services, domain models, business rules</td><td>Decide what should happen.</td></tr>
+    <tr><td><strong>Data access</strong></td><td>Repositories, queries, the ORM</td><td>Read and write the database.</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="side">The supporting systems</h2>
+<p>A real backend rarely talks to just one database. Around the core request path sit specialised systems, each solving one problem well:</p>
+<div class="cards">
+  <div class="card"><h4><span class="k">13</span> Caching</h4><p>Keep hot answers close so you don't recompute them.</p></div>
+  <div class="card"><h4><span class="k">14</span> Task queues</h4><p>Push slow work (emails, image processing) to the background.</p></div>
+  <div class="card"><h4><span class="k">15</span> Search</h4><p>Elasticsearch for fast full-text search and type-ahead.</p></div>
+  <div class="card"><h4><span class="k">23–24</span> Object storage</h4><p>S3-style storage for files, large uploads and streaming.</p></div>
+  <div class="card"><h4><span class="k">25</span> Real-time</h4><p>WebSockets, server-sent events and pub/sub for live updates.</p></div>
+  <div class="card"><h4><span class="k">29</span> Webhooks</h4><p>Let other servers notify you instead of you polling them.</p></div>
+</div>
+
+<h2 id="production">What keeps it alive in production</h2>
+<p>Writing the happy path is the easy half. These concerns wrap around <em>every</em> request:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Concern</th><th>The question it answers</th><th>Lesson</th></tr></thead>
+  <tbody>
+    <tr><td>Error handling</td><td>What happens when something breaks?</td><td><a href="16-error-handling.html">16</a></td></tr>
+    <tr><td>Configuration</td><td>How does the same code run in dev, staging and prod?</td><td><a href="17-config.html">17</a></td></tr>
+    <tr><td>Observability</td><td>What is the system doing right now, and why?</td><td><a href="18-observability.html">18</a></td></tr>
+    <tr><td>Graceful shutdown</td><td>Can we restart without dropping requests?</td><td><a href="19-graceful-shutdown.html">19</a></td></tr>
+    <tr><td>Security</td><td>Who is trying to break in, and how?</td><td><a href="20-security.html">20</a></td></tr>
+    <tr><td>Scaling &amp; performance</td><td>Does it stay fast with 100× the traffic?</td><td><a href="21-scaling-1.html">21</a></td></tr>
+    <tr><td>Concurrency</td><td>Are we using the CPU and waiting time well?</td><td><a href="23-concurrency.html">22</a></td></tr>
+    <tr><td>Testing</td><td>How do we know it works, and keeps working?</td><td><a href="27-testing.html">26</a></td></tr>
+    <tr><td>Twelve-Factor &amp; OpenAPI</td><td>Is it portable, and is the contract clear?</td><td><a href="28-twelve-factor.html">27</a>, <a href="29-openapi.html">28</a></td></tr>
+    <tr><td>DevOps</td><td>How does code get from a laptop to production safely?</td><td><a href="31-devops.html">30</a></td></tr>
+  </tbody>
+</table></div>
+<aside class="callout note"><div class="tag">How to use this course</div><p>Don't try to memorise the map. Walk it once, lesson by lesson. Each topic makes the next one easier because they all describe the same request.</p></aside>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>Backend engineering means building reliable, scalable, fault-tolerant and maintainable systems, not just endpoints.</li>
+  <li>Framework-first learning leaves blind spots. Principles transfer across languages; framework APIs don't.</li>
+  <li>Most topics are stops on one request's path: network → HTTP → routing → middleware → validation → controller → service → database.</li>
+  <li>Supporting systems (cache, queue, search, storage, real-time) each solve one problem the database is bad at.</li>
+  <li>Production concerns such as errors, config, logs, shutdown, security and scaling wrap around every request.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Your team switches from Ruby on Rails to Go. Which knowledge transfers best?</summary><div><p>Understanding of the underlying systems: HTTP, routing, serialization, databases, caching. The Rails-specific APIs mostly don't transfer.</p></div></details>
+  <details><summary>Which layer would hold the rule "a user can't order more than 5 items on sale"?</summary><div><p>The business logic (service) layer. It's a business rule, not a data-format check or a database concern.</p></div></details>
+  <details><summary>Why doesn't one database handle everything?</summary><div><p>Each supporting system is optimised for one job: Redis for fast lookups, queues for deferred work, Elasticsearch for text relevance, S3 for large files. A single general-purpose database does all of these poorly at scale.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.flow("#fig-journey", {
+  w: 720, h: 380,
+  nodes: {
+    browser: { x: 70, y: 55, label: "Browser", sub: "client", kind: "client", w: 116 },
+    net: { x: 215, y: 55, label: "Internet", sub: "DNS · TLS · L3", kind: "net", w: 116 },
+    http: { x: 360, y: 55, label: "HTTP", sub: "L5", kind: "server", w: 116 },
+    router: { x: 505, y: 55, label: "Router", sub: "L6", kind: "server", w: 116 },
+    mw: { x: 650, y: 55, label: "Middleware", sub: "L8 · L10", kind: "server", w: 116 },
+    validate: { x: 650, y: 185, label: "Validation", sub: "L7 · L9", kind: "server", w: 116 },
+    controller: { x: 505, y: 185, label: "Controller", sub: "L10", kind: "server", w: 116 },
+    service: { x: 360, y: 185, label: "Service", sub: "business logic", kind: "server", w: 116 },
+    repo: { x: 215, y: 185, label: "Repository", sub: "data access", kind: "db", w: 116 },
+    db: { x: 70, y: 185, label: "Postgres", sub: "L12", kind: "db", shape: "cyl", w: 112, h: 62 },
+    cache: { x: 130, y: 320, label: "Cache", sub: "L13", kind: "cache", w: 112 },
+    queue: { x: 280, y: 320, label: "Queue", sub: "L14", kind: "queue", w: 112 },
+    search: { x: 430, y: 320, label: "Search", sub: "L15", kind: "ext", w: 112 },
+    storage: { x: 590, y: 320, label: "Object storage", sub: "L23–24", kind: "ext", w: 128 }
+  },
+  edges: [["browser", "net"], ["net", "http"], ["http", "router"], ["router", "mw"], ["mw", "validate"], ["validate", "controller"], ["controller", "service"], ["service", "repo"], ["repo", "db"], ["service", "cache"], ["service", "queue"], ["service", "search"], ["service", "storage"]],
+  steps: [
+    { path: ["browser", "net"], packet: "request", hl: ["net"], note: "The request leaves the browser: <b>DNS</b> finds the server, then it crosses networks and firewalls to a machine in the cloud (lesson 3)." },
+    { path: ["net", "http"], hl: ["http"], note: "The server reads a raw <b>HTTP</b> message: method, URL, headers, body (lesson 5)." },
+    { path: ["http", "router"], hl: ["router"], note: "<b>Routing</b> matches method + path to the right handler (lesson 6)." },
+    { path: ["router", "mw"], hl: ["mw"], note: "<b>Middleware</b> runs shared checks such as logging, CORS, rate limits and authentication (lessons 8 and 10)." },
+    { path: ["mw", "validate"], hl: ["validate"], note: "The JSON body is <b>deserialized</b>, then <b>validated and transformed</b> before any logic sees it (lessons 7 and 9)." },
+    { path: ["validate", "controller", "service"], hl: ["controller", "service"], note: "The <b>controller</b> hands clean data to a <b>service</b>, where the business rules live (lesson 10)." },
+    { path: ["service", "repo", "db"], hl: ["repo", "db"], note: "The <b>repository</b> turns intent into SQL and talks to the database (lesson 12)." },
+    { path: [["service", "cache"], ["service", "queue"], ["service", "search"], ["service", "storage"]], hl: ["cache", "queue", "search", "storage"], note: "Supporting systems join in when needed: cache, background jobs, search, file storage." },
+    { path: ["service", "controller", "validate", "mw", "router", "http", "net", "browser"], tone: "ok", packet: "200 OK", ok: ["browser"], note: "The result is <b>serialized</b> to JSON and travels back with a status code. API design rules shape this response (lesson 11)." }
+  ]
+});
+</script>
+</body>
+</html>
