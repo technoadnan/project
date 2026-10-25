@@ -167,7 +167,7 @@ BD.timeline("#fig-timeline", {
     { to: 4.5, note: "Instantly, <b>new requests are refused</b> (the load balancer sends them to the new instance). Request A finishes." },
     { to: 7, note: "Request B, a payment, completes normally. Nothing is cut off halfway." },
     { to: 9.3, note: "The background worker finishes its current job, then Redis is closed." },
-    { to: 10.5, note: "Finally the <b>DB pool</b> closes (acquired first, released last) and the process exits, well inside the 30 s limit." }
+    { to: 10.5, note: "Finally the <b>DB pool</b> closes (acquired first, released last) and the process exits, well inside the 30-second limit." }
   ]
 });
 </script>
