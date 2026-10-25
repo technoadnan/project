@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REST API design · Backend Dev</title>
+<meta name="description" content="Resources, URLs, methods, idempotency, status codes, pagination, filtering and consistency.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="11">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 11</span><span>Video · 2:03:34</span></div>
+  <h1>Complete REST API design</h1>
+  <p class="lead">Good API design is mostly about <strong>removing guesswork</strong>. REST already gives you the rules: resources as plural nouns, methods as verbs, predictable status codes. Follow them consistently and anyone can integrate your API without reading your code. And you stop debating "plural or singular?" for good.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Where REST came from and what the name means</li><li>URL design rules: plural nouns, hierarchy, slugs, versioning</li><li>Idempotency and choosing the right method, including custom actions</li><li>A step-by-step workflow from wireframes to endpoints</li><li>Pagination, sorting and filtering done right</li><li>Consistency, sane defaults and docs</li></ul></div>
+</div>
+<h2 id="why">Why standards?</h2>
+<p>Even experienced developers still ask: plural or singular paths? PATCH or PUT? Which method for an action like "archive"? Which status code? The standards were written in the multi-page-app era, and today's single-page apps raise new questions.</p>
+<p>Without shared rules, the only way to learn how an API behaves is to read its code or trial-and-error it. With them, consumers can <strong>predict</strong> behaviour: fewer bugs, fewer meetings, faster integrations. The aim here isn't new standards, just a clear set of rules extracted from the existing ones.</p>
+
+<h2 id="history">Where REST came from</h2>
+<figure class="anim" data-steps id="fig-hist">
+  <figcaption class="anim-title">From a knowledge-sharing project to an architectural style</figcaption>
+  <div class="frame" data-note="Within about a year, one person invented most of the building blocks we still use.">
+    <div class="era"><span class="yr">1990</span><div><h4>Tim Berners-Lee starts the World Wide Web</h4><p>Built to share knowledge globally: <strong>URIs</strong>, <strong>HTTP</strong>, <strong>HTML</strong>, the first web server, the first browser and a built-in WYSIWYG editor.</p></div></div>
+  </div>
+  <div class="frame" data-note="The original design hadn't planned for this many users.">
+    <div class="era"><span class="yr">1993</span><div><h4>A scalability crisis</h4><p>The user base grew exponentially and the web was heading for breakdown. Roy Fielding, co-founder of the Apache HTTP Server project, proposed a set of <strong>constraints</strong> to make it scale.</p></div></div>
+  </div>
+  <div class="frame" data-note="These constraints still shape every web backend today.">
+    <div class="era"><span class="yr">Constraints</span><div><h4>Fielding's six rules</h4><p><b>Client–server</b> (separate UI from data) · <b>Uniform interface</b> (one standard way to interact) · <b>Layered system</b> (room for load balancers and proxies) · <b>Cache</b> (responses labelled cacheable or not) · <b>Stateless</b> (every request is self-contained) · <b>Code on demand</b> (optional: send JS to clients).</p></div></div>
+  </div>
+  <div class="frame" data-note="Fielding and Berners-Lee wrote HTTP/1.1 together; later Fielding gave the style its name.">
+    <div class="era"><span class="yr">1997–2000</span><div><h4>HTTP/1.1 and the REST dissertation</h4><p>Fielding and Berners-Lee standardised HTTP/1.1. In 2000, Fielding's PhD dissertation described the web's architecture and named it <strong>REST</strong>: Representational State Transfer. Worth reading.</p></div></div>
+  </div>
+</figure>
+<div class="cards">
+  <div class="card"><h4>Representational</h4><p>A resource (a user, a book) can be represented as JSON for an API client, HTML for a browser, or XML.</p></div>
+  <div class="card"><h4>State</h4><p>The resource's current data. A cart's state is its items, quantities and total.</p></div>
+  <div class="card"><h4>Transfer</h4><p>Moving representations between client and server using HTTP methods.</p></div>
+</div>
+
+<h2 id="urls">Designing URLs</h2>
+<div class="url-anatomy"><span class="u-static">https://</span><span class="u-param">api.example.com</span><span class="u-static">/v1</span><span class="u-query">/books/harry-potter</span><span class="u-static">?format=short</span><span class="u-static">#reviews</span></div>
+<p class="small muted">scheme · authority (an <code>api.</code> subdomain is a common convention) · version · path · query · fragment (jumps to a page section; not used by APIs)</p>
+<ul>
+  <li><strong>Resources are always plural nouns</strong>: <code>/books</code> lists books, and <code>/books/42</code> is still <code>books</code>, because you're picking one item <em>from the collection</em>. Never <code>/book/42</code>.</li>
+  <li><strong><code>/</code> means hierarchy</strong>: collection → item → sub-resource or action.</li>
+  <li><strong>Lowercase, hyphens, no spaces or underscores.</strong> "Harry Potter" becomes the slug <code>harry-potter</code>, which is safe across browsers, servers and operating systems.</li>
+  <li><strong>Version in the path</strong> (<code>/v1</code>) so breaking changes get a new version (lesson 6).</li>
+</ul>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>A REST URL reads like a library's shelving system: <code>/books</code> is the aisle, <code>/books/42</code> is one book on it, <code>/books/42/reviews</code> is the notes tucked inside that book. Learn the system once and you can find anything.</p></aside>
+
+<h2 id="methods">Methods and idempotency</h2>
+<p><strong>Idempotent</strong> means: doing it once or a thousand times leaves the <em>server</em> in the same state. (Responses can differ. GET can return new books someone else added, but <em>your</em> call didn't change anything.)</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Method</th><th>Use</th><th>Idempotent</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td><code>GET</code></td><td>Fetch</td><td><span class="chip ok">yes</span></td><td>Reading causes no side effects.</td></tr>
+    <tr><td><code>PATCH</code></td><td>Update some fields</td><td><span class="chip ok">yes*</span></td><td>Setting name A→B, again and again, stays B.</td></tr>
+    <tr><td><code>PUT</code></td><td>Replace the whole resource</td><td><span class="chip ok">yes</span></td><td>Same payload, same result.</td></tr>
+    <tr><td><code>DELETE</code></td><td>Remove</td><td><span class="chip ok">yes</span></td><td>The second call gets a 404, but changes nothing.</td></tr>
+    <tr><td><code>POST</code></td><td>Create, <strong>or a custom action</strong></td><td><span class="chip bad">no</span></td><td>Each call creates another book with a new ID.</td></tr>
+  </tbody>
+</table></div>
+<p class="small muted">*for "set field to value" updates, which is how PATCH is used in practice.</p>
+<p>PATCH vs PUT: in today's JSON-heavy single-page apps you almost always send partial fields, so <strong>use PATCH for updates</strong>. Mixing them up is tolerable internally, but a public API should respect the semantics so integrators aren't misled.</p>
+<p><strong>Custom actions</strong> don't fit create, read, update or delete: "send email", "archive organisation", "clone project". REST leaves POST open-ended for exactly this: <code>POST /organizations/:id/archive</code>. Archiving isn't just <code>status = archived</code>; the server may also clean up projects, notify members and more, so it deserves its own action.</p>
+
+<h2 id="workflow">From wireframes to endpoints</h2>
+<p>Design the <strong>interface</strong> before writing any code: how will consumers use this API?</p>
+<figure class="anim" id="fig-flow">
+  <figcaption class="anim-title">The API design workflow</figcaption>
+</figure>
+
+<h2 id="playground">Playground: an organizations API</h2>
+<p>This is a tiny in-browser server following every rule in this lesson. Use the quick buttons or write your own requests, and watch the status codes.</p>
+<figure class="anim" id="fig-api">
+  <figcaption class="anim-title">Try it: CRUD, pagination, sorting, filtering and a custom action</figcaption>
+  <div class="widget">
+    <div class="presets" id="api-presets"></div>
+    <div class="row" style="margin-top:12px">
+      <select id="api-method" aria-label="Method"><option>GET</option><option>POST</option><option>PATCH</option><option>PUT</option><option>DELETE</option></select>
+      <input type="text" id="api-url" value="/v1/organizations" aria-label="URL" style="flex:1;min-width:200px;font-family:var(--mono)">
+      <button class="act" type="button" id="api-send">Send ▶</button>
+    </div>
+    <textarea id="api-body" rows="4" spellcheck="false" aria-label="JSON body" placeholder="JSON body (for POST / PATCH)"></textarea>
+    <pre id="api-out" style="margin:12px 0 0;max-height:360px;overflow:auto">Press a quick button to send a request.</pre>
+  </div>
+</figure>
+<div class="table-wrap"><table>
+  <thead><tr><th>Endpoint</th><th>Does</th><th>Success</th></tr></thead>
+  <tbody>
+    <tr><td><code>GET /organizations</code></td><td>List (paginated, sortable, filterable)</td><td><span class="chip ok">200</span> even when empty</td></tr>
+    <tr><td><code>POST /organizations</code></td><td>Create; returns the new entity</td><td><span class="chip ok">201</span></td></tr>
+    <tr><td><code>GET /organizations/:id</code></td><td>Fetch one</td><td><span class="chip ok">200</span> / <span class="chip warn">404</span></td></tr>
+    <tr><td><code>PATCH /organizations/:id</code></td><td>Partial update; returns the updated entity</td><td><span class="chip ok">200</span></td></tr>
+    <tr><td><code>DELETE /organizations/:id</code></td><td>Remove; empty body</td><td><span class="chip ok">204</span></td></tr>
+    <tr><td><code>POST /organizations/:id/archive</code></td><td>Custom action</td><td><span class="chip ok">200</span> (or <span class="chip ok">201</span> if it creates something, like <code>/projects/:id/clone</code>)</td></tr>
+  </tbody>
+</table></div>
+<p>Notice: create and list share a path, and get, update and delete share a path. <strong>The method tells them apart.</strong> And a POST doesn't automatically mean 201: return 201 only when something new was created.</p>
+
+<h2 id="pagination">Pagination, sorting and filtering</h2>
+<p>Never return every row. Serializing a thousand records is slow, the client waits, and the user only sees 10–20 at a time anyway.</p>
+<figure class="anim" data-steps id="fig-pages">
+  <figcaption class="anim-title">5 organizations, <code>limit=2</code></figcaption>
+  <div class="frame" data-note="<code>?page=1&amp;limit=2</code>: the newest two (default sort: createdAt, descending).">
+    <div class="stages"><span class="st ok">org 5</span><span class="st ok">org 4</span><span class="st">org 3</span><span class="st">org 2</span><span class="st">org 1</span></div>
+    <pre>{ "data": [org5, org4], "total": 5, "page": 1, "totalPages": 3 }</pre>
+  </div>
+  <div class="frame" data-note="<code>?page=2&amp;limit=2</code>: the next slice.">
+    <div class="stages"><span class="st">org 5</span><span class="st">org 4</span><span class="st ok">org 3</span><span class="st ok">org 2</span><span class="st">org 1</span></div>
+    <pre>{ "data": [org3, org2], "total": 5, "page": 2, "totalPages": 3 }</pre>
+  </div>
+  <div class="frame" data-note="<code>?page=3&amp;limit=2</code>: the last page. <code>page === totalPages</code> tells an infinite scroll to stop.">
+    <div class="stages"><span class="st">org 5</span><span class="st">org 4</span><span class="st">org 3</span><span class="st">org 2</span><span class="st ok">org 1</span></div>
+    <pre>{ "data": [org1], "total": 5, "page": 3, "totalPages": 3 }</pre>
+  </div>
+</figure>
+<div class="cards">
+  <div class="card"><h4>Pagination</h4><p><code>page</code> and <code>limit</code> in; <code>data</code>, <code>total</code>, <code>page</code>, <code>totalPages</code> out. Defaults: page 1, limit 10–20.</p></div>
+  <div class="card"><h4>Sorting</h4><p><code>sortBy</code> and <code>sortOrder</code>. Default <code>createdAt desc</code>. Without an explicit sort, databases return rows in no guaranteed order.</p></div>
+  <div class="card"><h4>Filtering</h4><p>Field names as params: <code>?status=archived&amp;name=acme</code>.</p></div>
+</div>
+<aside class="callout warn"><div class="tag">Rule</div><p>A list that matches nothing is <strong>200 with an empty array</strong>, not 404. Return 404 only when the client asks for a <em>specific</em> resource that doesn't exist.</p></aside>
+
+<h2 id="consistency">Consistency is the feature</h2>
+<p>Once a consumer integrates one endpoint, they'll <em>assume</em> the rest work the same way. Reward that assumption.</p>
+<ul>
+  <li><strong>Same patterns everywhere</strong>: if organizations are plural, projects are plural. If one payload says <code>description</code>, none say <code>desc</code>.</li>
+  <li><strong>camelCase JSON</strong> keys, in requests and responses.</li>
+  <li><strong>No abbreviations</strong>: you know what <code>dsc</code> means; your integrators don't.</li>
+  <li><strong>Sane defaults</strong>: page 1, limit 10, newest first. A new organization defaults to <code>status: "active"</code>, so only require what you truly need.</li>
+  <li><strong>Server-managed fields</strong> (<code>id</code>, <code>createdAt</code>, <code>updatedAt</code>) are never accepted from the client.</li>
+  <li><strong>Interactive docs</strong> (OpenAPI/Swagger, lesson 28) from day one: a playground for integrators and a testing tool for you.</li>
+</ul>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>A consistent API is like a city where every street sign uses the same format. After the first few streets you stop reading the signs carefully, because you <em>know</em> where to look.</p></aside>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>REST came from Fielding's constraints for scaling the web: client–server, uniform interface, layers, cache, statelessness.</li>
+  <li>Paths are lowercase plural nouns with hierarchy; slugs use hyphens; version in the path.</li>
+  <li>GET, PUT, PATCH and DELETE are idempotent; POST isn't. Use POST for custom actions like <code>/:id/archive</code>.</li>
+  <li>Workflow: wireframes → nouns (resources) → schema → actions → interface design → code.</li>
+  <li>Status codes: 201 for creates, 204 for deletes, 404 only for specific missing resources, 200 for empty lists.</li>
+  <li>Lists need pagination, sorting and filtering with sane defaults.</li>
+  <li>Consistency beats cleverness: same names, same shapes, same rules everywhere.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Design the endpoint to fetch the comments of post 7.</summary><div><p><code>GET /v1/posts/7/comments</code>: plural nouns, hierarchy through slashes, paginated like any list.</p></div></details>
+  <details><summary><code>GET /tasks?status=done</code> matches nothing. What do you return?</summary><div><p><code>200</code> with <code>{ "data": [], "total": 0, "page": 1, "totalPages": 0 }</code>. An empty list isn't an error.</p></div></details>
+  <details><summary>"Publish a draft article": which method and path?</summary><div><p>It's a custom action with side effects (notifications, timestamps), so <code>POST /v1/articles/:id/publish</code>.</p></div></details>
+  <details><summary>A client calls DELETE twice on the same item. Is DELETE still idempotent if the second call returns 404?</summary><div><p>Yes. Idempotency is about server state, not the response. The second call changes nothing.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.flow("#fig-flow", {
+  w: 720, h: 210,
+  nodes: {
+    wf: { x: 70, y: 70, label: "Wireframes", sub: "+ requirements", kind: "client", w: 120 },
+    nouns: { x: 215, y: 70, label: "Find nouns", sub: "= resources", kind: "server", w: 120 },
+    schema: { x: 360, y: 70, label: "DB schema", sub: "lesson 12", kind: "db", w: 120 },
+    actions: { x: 505, y: 70, label: "Actions", sub: "CRUD + custom", kind: "server", w: 120 },
+    iface: { x: 650, y: 70, label: "Interface", sub: "in Insomnia", kind: "cache", w: 120 },
+    code: { x: 650, y: 165, label: "Code", sub: "only now", kind: "ext", w: 120 }
+  },
+  edges: [["wf", "nouns"], ["nouns", "schema"], ["schema", "actions"], ["actions", "iface"], ["iface", "code"]],
+  steps: [
+    { path: ["wf"], hl: ["wf"], note: "Start from the <b>wireframes</b> and requirements. They show how real users interact with the data." },
+    { path: ["wf", "nouns"], hl: ["nouns"], set: { nouns: "projects, users, orgs, tasks, tags" }, note: "For a project-management app (think Jira or Linear), the nouns are your <b>resources</b>: projects, users, organizations, tasks, tags." },
+    { path: ["nouns", "schema"], hl: ["schema"], set: { nouns: "projects, users, orgs, tasks, tags", schema: "organizations · projects · tasks" }, note: "Resources become <b>tables</b>, covered in the next lesson." },
+    { path: ["schema", "actions"], hl: ["actions"], set: { nouns: "projects, users, orgs, tasks, tags", schema: "organizations · projects · tasks", actions: "list get create update delete archive" }, note: "List what clients must <b>do</b> with each resource: CRUD, plus custom actions like archive or clone." },
+    { path: ["actions", "iface"], hl: ["iface"], set: { nouns: "projects, users, orgs, tasks, tags", schema: "organizations · projects · tasks", actions: "list get create update delete archive" }, note: "Design the <b>interface</b> (routes, payloads, responses) in an API client or OpenAPI editor." },
+    { path: ["iface", "code"], tone: "ok", ok: ["code"], set: { nouns: "projects, users, orgs, tasks, tags", schema: "organizations · projects · tasks", actions: "list get create update delete archive" }, note: "Only then write code, in whatever language. The interface already answers the hard questions." }
+  ]
+});
+
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var db = [], deleted = null, t0 = Date.parse("2025-01-01T09:00:00Z"), clock = 0;
+  var stamp = function () { clock++; return new Date(t0 + clock * 86400000).toISOString(); };
+  var newId = function () { return "org_" + Math.random().toString(36).slice(2, 7); };
+  ["Acme", "Globex", "Initech", "Umbrella", "Hooli"].forEach(function (n) { var ts = stamp(); db.push({ id: newId(), name: n, status: "active", description: null, createdAt: ts, updatedAt: ts }); });
+  var TEXT = { 200: "OK", 201: "Created", 204: "No Content", 400: "Bad Request", 404: "Not Found", 405: "Method Not Allowed" };
+  function res(status, body) { return { status: status, body: body }; }
+  function handle(method, url, raw) {
+    var qi = url.indexOf("?"), path = (qi < 0 ? url : url.slice(0, qi)).replace(/\/+$/, ""), qs = qi < 0 ? "" : url.slice(qi + 1), q = {};
+    qs.split("&").forEach(function (kv) { if (!kv) return; var s = kv.split("="); q[decodeURIComponent(s[0])] = decodeURIComponent(s[1] || ""); });
+    var body = {};
+    if ((method === "POST" || method === "PATCH" || method === "PUT") && raw.trim()) {
+      try { body = JSON.parse(raw); } catch (e) { return res(400, { error: "Invalid JSON body" }); }
+    }
+    var m = path.match(/^\/v1\/organizations(?:\/([^/]+))?(?:\/([^/]+))?$/);
+    if (!m) return res(404, { error: "Route not found" });
+    var idp = m[1], action = m[2];
+    if (!idp) {
+      if (method === "GET") {
+        var page = q.page ? Number(q.page) : 1, limit = q.limit ? Number(q.limit) : 10;
+        var sortBy = q.sortBy || "createdAt", order = q.sortOrder || "desc", errs = [];
+        if (!(page >= 1 && page % 1 === 0)) errs.push({ field: "page", message: "must be a positive integer" });
+        if (!(limit >= 1 && limit <= 100 && limit % 1 === 0)) errs.push({ field: "limit", message: "must be between 1 and 100" });
+        if (["createdAt", "name", "status"].indexOf(sortBy) < 0) errs.push({ field: "sortBy", message: "one of createdAt, name, status" });
+        if (["asc", "desc"].indexOf(order) < 0) errs.push({ field: "sortOrder", message: "asc or desc" });
+        if (errs.length) return res(400, { errors: errs });
+        var rows = db.filter(function (o) { return (!q.status || o.status === q.status) && (!q.name || o.name.toLowerCase().indexOf(q.name.toLowerCase()) >= 0); });
+        rows.sort(function (a, b) { var x = a[sortBy], y = b[sortBy]; return (x < y ? -1 : x > y ? 1 : 0) * (order === "asc" ? 1 : -1); });
+        var total = rows.length;
+        return res(200, { data: rows.slice((page - 1) * limit, page * limit), total: total, page: page, totalPages: Math.ceil(total / limit) });
+      }
+      if (method === "POST") {
+        var e2 = [];
+        if (typeof body.name !== "string" || !body.name.trim()) e2.push({ field: "name", message: "is required" });
+        if (body.status != null && ["active", "archived"].indexOf(body.status) < 0) e2.push({ field: "status", message: "active or archived" });
+        if (e2.length) return res(400, { errors: e2 });
+        var ts = stamp(), o = { id: newId(), name: body.name.trim(), status: body.status || "active", description: body.description || null, createdAt: ts, updatedAt: ts };
+        db.push(o); return res(201, o);
+      }
+      return res(405, { error: "Use GET or POST on /v1/organizations" });
+    }
+    var org = db.find(function (o) { return o.id === idp; });
+    if (action) {
+      if (action !== "archive") return res(404, { error: "Route not found" });
+      if (method !== "POST") return res(405, { error: "Custom actions use POST" });
+      if (!org) return res(404, { error: "Organization not found" });
+      org.status = "archived"; org.updatedAt = stamp(); return res(200, org);
+    }
+    if (method === "GET") return org ? res(200, org) : res(404, { error: "Organization not found" });
+    if (method === "PATCH") {
+      if (!org) return res(404, { error: "Organization not found" });
+      ["name", "status", "description"].forEach(function (k) { if (k in body) org[k] = body[k]; });
+      org.updatedAt = stamp(); return res(200, org);
+    }
+    if (method === "DELETE") {
+      if (!org) return res(404, { error: "Organization not found" });
+      db = db.filter(function (o) { return o !== org; }); deleted = org.id; return res(204, null);
+    }
+    return res(405, { error: "Method not allowed here. This API uses PATCH for updates." });
+  }
+  function send() {
+    var method = $("api-method").value, url = $("api-url").value.trim();
+    var r = handle(method, url, $("api-body").value);
+    $("api-out").textContent = method + " " + url + "\n\nHTTP/1.1 " + r.status + " " + TEXT[r.status] + (r.body == null ? "\n\n(no body)" : "\n\n" + JSON.stringify(r.body, null, 2));
+    $("api-out").scrollTop = 0;
+  }
+  var first = function () { return (db.slice().sort(function (a, b) { return a.createdAt < b.createdAt ? 1 : -1; })[0] || { id: "org_none" }).id; };
+  var presets = [
+    ["List", function () { return ["GET", "/v1/organizations", ""]; }],
+    ["Page 2 · limit 2", function () { return ["GET", "/v1/organizations?page=2&limit=2", ""]; }],
+    ["Sort by name ↑", function () { return ["GET", "/v1/organizations?sortBy=name&sortOrder=asc", ""]; }],
+    ["Filter archived", function () { return ["GET", "/v1/organizations?status=archived", ""]; }],
+    ["Create", function () { return ["POST", "/v1/organizations", '{\n  "name": "Wayne Corp",\n  "description": "Gotham"\n}']; }],
+    ["Create (no name)", function () { return ["POST", "/v1/organizations", '{\n  "description": "oops"\n}']; }],
+    ["Get one", function () { return ["GET", "/v1/organizations/" + first(), ""]; }],
+    ["Update", function () { return ["PATCH", "/v1/organizations/" + first(), '{\n  "description": "New description"\n}']; }],
+    ["Archive (custom)", function () { return ["POST", "/v1/organizations/" + first() + "/archive", ""]; }],
+    ["Delete", function () { return ["DELETE", "/v1/organizations/" + first(), ""]; }],
+    ["Get deleted", function () { return ["GET", "/v1/organizations/" + (deleted || "org_missing"), ""]; }],
+    ["PUT (unsupported)", function () { return ["PUT", "/v1/organizations/" + first(), '{\n  "name": "Replaced"\n}']; }]
+  ];
+  presets.forEach(function (p) {
+    var b = document.createElement("button"); b.type = "button"; b.textContent = p[0];
+    b.addEventListener("click", function () { var r = p[1](); $("api-method").value = r[0]; $("api-url").value = r[1]; $("api-body").value = r[2]; send(); });
+    $("api-presets").appendChild(b);
+  });
+  $("api-send").addEventListener("click", send);
+  $("api-url").addEventListener("keydown", function (e) { if (e.key === "Enter") send(); });
+})();
+</script>
+</body>
+</html>
