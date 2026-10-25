@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configuration management · Backend Dev</title>
+<meta name="description" content="What config is, where it lives, how it&#x27;s loaded and validated, and how secrets stay safe.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="17">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 17</span><span>Video · 36:14</span></div>
+  <h1>Production-grade configuration management</h1>
+  <p class="lead">Configuration is everything that controls <strong>how the same code behaves in different places</strong>: which database it talks to, what it logs, which features are on, how long it waits. Managed well, you change behaviour without touching code. Managed badly, you get <strong>configuration chaos</strong>.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>What counts as configuration (far more than secrets)</li><li>The main types of config</li><li>Where config lives: env vars, files, key–value stores and secret managers</li><li>Why each environment needs different values</li><li>Security, and the one habit that saves you: validating config at startup</li></ul></div>
+</div>
+<h2 id="what">More than passwords</h2>
+<p>Say "config" and most people think of the database URL, JWT secret and API keys. That's like saying a car is just its engine: crucial, but only part of the picture. Config also decides how your app <strong>starts</strong>, how it <strong>connects</strong> to other services, what and where it <strong>logs</strong>, where <strong>metrics</strong> go, and which <strong>features</strong> are enabled for whom.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>Your code is a recipe; config is the kitchen it's cooked in. The same lasagne recipe needs different oven settings at home, in a test kitchen and in a restaurant serving hundreds. You don't rewrite the recipe; you adjust the settings.</p></aside>
+<p>Each setting has its own character: some are <strong>secret</strong> (leaking them causes real damage), some change <strong>often</strong> and some quarterly, some are <strong>the same everywhere</strong> and some <strong>differ per environment</strong>. Modern backends are distributed systems (databases, caches, queues, third-party APIs), and every integration point needs config, including how to handle failures and stay secure.</p>
+<aside class="callout warn"><div class="tag">Configuration chaos</div><p>Hard-coded values scattered through the codebase, environments that behave differently, secrets committed to Git, and bugs nobody can reproduce because nobody knows which setting was live. A misconfigured frontend shows the wrong button; a misconfigured backend can <strong>leak customer data, charge cards wrongly, or take the platform down</strong>.</p></aside>
+
+<h2 id="types">Types of configuration</h2>
+<div class="cards">
+  <div class="card"><h4>Application settings</h4><p>Port, log level (<code>debug</code> locally, <code>info</code> in prod), connection pool size, timeouts. A 60 s timeout on an AI-image endpoint that takes 80 s gives you 504s.</p></div>
+  <div class="card"><h4>Database</h4><p>Host, port, user, password and database name (often combined into one URL), plus query timeouts.</p></div>
+  <div class="card"><h4>External services</h4><p>API keys for email (Resend, Mailchimp), payments (Stripe), auth (Clerk) and so on.</p></div>
+  <div class="card"><h4>Feature flags</h4><p>Turn features on or off, for some or all users, without deploying.</p></div>
+  <div class="card"><h4>Security</h4><p>JWT and session secrets, session timeouts.</p></div>
+  <div class="card"><h4>Performance tuning</h4><p>Pool sizes, worker counts, runtime knobs like Go's <code>GOMAXPROCS</code>.</p></div>
+  <div class="card"><h4>Business rules</h4><p>Maximum order amount, discount limits, centralised instead of buried in code.</p></div>
+  <div class="card"><h4>Infrastructure</h4><p>DevOps-level settings for deployments, regions and scaling.</p></div>
+</div>
+<h3>Feature flags in action</h3>
+<figure class="anim" id="fig-flags">
+  <figcaption class="anim-title">Rolling out a new checkout to US users only</figcaption>
+</figure>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>A feature flag is a light switch wired in advance. The new feature is already installed (deployed); flipping the switch (config) turns it on for some rooms (users), with no electrician (deploy) needed.</p></aside>
+
+<h2 id="sources">Where config lives</h2>
+<div class="cards">
+  <div class="card"><h4>Environment variables</h4><p>The most common source, provided by the operating system. Locally a <code>.env</code> file is loaded by a library like dotenv. In the cloud, the deployment injects them, often pulled from a secret manager.</p></div>
+  <div class="card"><h4>Files</h4><p><strong>YAML</strong> (supports comments, unlike JSON) or <strong>TOML</strong>. Open-source projects like Authelia and Apache Answer ship a <code>config.yaml</code> with server, log, storage and session sections.</p></div>
+  <div class="card"><h4>Key–value stores</h4><p>Consul, etcd: lightweight, central, and cloud-native.</p></div>
+  <div class="card"><h4>Secret managers</h4><p>HashiCorp Vault, AWS Parameter Store, Azure Key Vault, Google Secret Manager: encrypted, audited and centralised. Ideal across Kubernetes, autoscaling and multiple clouds.</p></div>
+</div>
+<p>Real apps often use a <strong>hybrid</strong>: a loader reads several sources with a defined priority, merges them into one runtime config, then validates it.</p>
+<figure class="anim" id="fig-layers">
+  <figcaption class="anim-title">Layered config: later sources override earlier ones</figcaption>
+</figure>
+
+<h2 id="envs">Why each environment differs</h2>
+<p>Same code, different priorities:</p>
+<div class="tabs">
+  <div class="tab" data-label="Development">
+    <p><strong>Priority: developer productivity and debugging.</strong></p>
+    <pre>LOG_LEVEL=debug
+DB_POOL_MAX=10             <span class="c"># a laptop handles this easily</span>
+DATABASE_URL=postgres://localhost:5432/app
+FEATURE_NEW_CHECKOUT=true  <span class="c"># try everything</span>
+STRIPE_API_KEY=sk_test_…</pre>
+  </div>
+  <div class="tab" data-label="Test (CI)">
+    <p><strong>Priority: automated validation and quality.</strong> A GitHub Action spins up a throwaway environment for unit and integration tests.</p>
+    <pre>LOG_LEVEL=warn
+DATABASE_URL=postgres://ci-db:5432/test
+EMAIL_PROVIDER=fake        <span class="c"># never email real people from CI</span></pre>
+  </div>
+  <div class="tab" data-label="Staging">
+    <p><strong>Priority: mirror production, without production costs.</strong> Used by developers and testers, so a little slowness is fine.</p>
+    <pre>LOG_LEVEL=info
+DB_POOL_MAX=2              <span class="c"># deliberately small to save money</span>
+FEATURE_NEW_CHECKOUT=true
+STRIPE_API_KEY=sk_test_…</pre>
+  </div>
+  <div class="tab" data-label="Production">
+    <p><strong>Priority: reliability, security and performance.</strong></p>
+    <pre>LOG_LEVEL=info             <span class="c"># don't flood valuable logs</span>
+DB_POOL_MAX=50             <span class="c"># ready for traffic spikes</span>
+FEATURE_NEW_CHECKOUT=us-only
+STRIPE_API_KEY=(from secret manager)</pre>
+  </div>
+</div>
+<p>Because behaviour lives in config, none of these differences require a code change.</p>
+
+<h2 id="security">Keeping config secure</h2>
+<ul>
+  <li><strong>Never hard-code secrets</strong> (database URLs, API keys, JWT secrets) or commit them to Git.</li>
+  <li><strong>Prefer a secret manager.</strong> It encrypts secrets at rest and in transit, so you don't have to build that yourself. When it comes to security, over-engineering is fine.</li>
+  <li><strong>Least-privilege access.</strong> Frontend developers get the frontend's config, backend developers get databases and Redis, and only DevOps gets cloud-infrastructure credentials.</li>
+  <li><strong>Rotate</strong> keys and secrets periodically.</li>
+</ul>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>A <code>.env</code> file passed around on Slack is a house key under the doormat. A secret manager is a bank vault: locked, logged, and you can change the locks.</p></aside>
+
+<h2 id="validate">The one habit: validate config at startup</h2>
+<p>Reading <code>process.env.WHATEVER</code> directly means a missing or mistyped value surfaces as a strange bug in production, possibly weeks later. Instead, load every source, then <strong>validate the whole config with a schema before the server starts</strong>: required vs optional, types, defaults. If anything is wrong, refuse to start (lesson 16 shows why that's the safe failure).</p>
+<pre><span class="c">// config.ts (Zod). In Go, use a validator such as go-playground/validator.</span>
+<span class="k">const</span> bool = z.enum([<span class="s">"true"</span>, <span class="s">"false"</span>]).transform(v =&gt; v === <span class="s">"true"</span>);
+
+<span class="k">const</span> Config = z.object({
+  PORT:                 z.coerce.number().int().default(<span class="n">8080</span>),
+  LOG_LEVEL:            z.enum([<span class="s">"debug"</span>, <span class="s">"info"</span>, <span class="s">"warn"</span>, <span class="s">"error"</span>]).default(<span class="s">"info"</span>),
+  DATABASE_URL:         z.string().url(),                 <span class="c">// required</span>
+  DB_POOL_MAX:          z.coerce.number().int().min(<span class="n">1</span>).default(<span class="n">10</span>),
+  STRIPE_API_KEY:       z.string().startsWith(<span class="s">"sk_"</span>),      <span class="c">// required</span>
+  FEATURE_NEW_CHECKOUT: bool.default(<span class="s">"false"</span>),
+});
+
+<span class="k">export const</span> config = Config.parse(process.env); <span class="c">// throws → the app refuses to start</span></pre>
+<aside class="callout warn"><div class="tag">Gotcha</div><p>Env vars are always strings. <code>Boolean("false")</code> is <code>true</code>, and so is <code>z.coerce.boolean()</code> on <code>"false"</code>. Parse booleans explicitly, as above.</p></aside>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>Config is how the same code behaves differently: connections, logging, timeouts, flags, business rules, secrets.</li>
+  <li>Centralise it, or you get configuration chaos: scattered values, inconsistent environments, leaked secrets.</li>
+  <li>Sources: env vars, YAML/TOML files, key–value stores and secret managers, often layered by priority.</li>
+  <li>Each environment has different priorities, so values differ (e.g. pool size 10 in dev, 2 in staging, 50 in prod).</li>
+  <li>Never hard-code secrets; use a secret manager, least-privilege access and rotation.</li>
+  <li>Validate all config with a schema at startup, and fail fast if it's wrong.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Your team wants to show a new pricing page to 10% of users and turn it off instantly if conversions drop. What do you use?</summary><div><p>A feature flag (with percentage targeting), stored in config or a flag service, so it can change without a deploy.</p></div></details>
+  <details><summary>Why is staging's pool size smaller than production's if staging should mirror production?</summary><div><p>Staging mirrors behaviour, not scale. It's used by a handful of developers and testers, so a small pool keeps cloud costs down at the price of some acceptable slowness.</p></div></details>
+  <details><summary><code>FEATURE_X=false</code> but the feature is on in production. Likely bug?</summary><div><p>The string "false" was coerced to the boolean <code>true</code> (any non-empty string is truthy). Parse booleans explicitly in your config schema.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.flow("#fig-flags", {
+  w: 720, h: 250,
+  nodes: {
+    us: { x: 75, y: 60, label: "User in US", kind: "client", w: 120 },
+    in: { x: 75, y: 190, label: "User in India", kind: "client", w: 120 },
+    api: { x: 300, y: 125, label: "Checkout API", sub: "flag: new_checkout", kind: "server", w: 160 },
+    cfg: { x: 300, y: 25, label: "Config", sub: "new_checkout = US only", kind: "cache", w: 190, h: 40 },
+    nw: { x: 590, y: 60, label: "New checkout", sub: "v2 flow", kind: "queue", w: 140 },
+    old: { x: 590, y: 190, label: "Old checkout", sub: "v1 flow", kind: "db", w: 140 }
+  },
+  edges: [["us", "api"], ["in", "api"], ["api", "nw"], ["api", "old"], ["cfg", "api", { dashed: true }]],
+  steps: [
+    { path: ["cfg", "api"], hl: ["cfg"], note: "Both checkout flows are already deployed. Config says: <b>new_checkout enabled for US users only</b>." },
+    { path: ["us", "api", "nw"], tone: "ok", ok: ["nw"], note: "A US user's request checks the flag and gets the <b>new</b> checkout." },
+    { path: ["in", "api", "old"], ok: ["old"], note: "A user in India gets the <b>old</b> one. Same code, same deploy." },
+    { path: ["cfg", "api"], warn: ["cfg"], set: { cfg: "new_checkout = OFF" }, note: "Conversions dip? Flip the flag off in config…" },
+    { path: ["us", "api", "old"], ok: ["old"], set: { cfg: "new_checkout = OFF" }, note: "…and US users are instantly back on the old flow, without a redeploy." }
+  ]
+});
+
+BD.flow("#fig-layers", {
+  w: 720, h: 270,
+  nodes: {
+    def: { x: 95, y: 45, label: "Defaults in code", sub: "PORT=8080 · POOL=10", kind: "ext", w: 170, h: 48 },
+    file: { x: 95, y: 115, label: "config.yaml", sub: "LOG_LEVEL=info", kind: "ext", w: 170, h: 48 },
+    env: { x: 95, y: 185, label: "Env vars", sub: "POOL=50", kind: "ext", w: 170, h: 48 },
+    vault: { x: 95, y: 250, label: "Secret manager", sub: "DATABASE_URL · STRIPE_KEY", kind: "ext", w: 200, h: 40 },
+    merged: { x: 400, y: 150, label: "Runtime config", sub: "{ }", kind: "cache", w: 180, h: 70 },
+    val: { x: 615, y: 150, label: "Validate", sub: "schema", kind: "server", w: 120 }
+  },
+  edges: [["def", "merged"], ["file", "merged"], ["env", "merged"], ["vault", "merged"], ["merged", "val"]],
+  steps: [
+    { path: ["def", "merged"], hl: ["merged"], set: { merged: "PORT 8080 · POOL 10" }, note: "Start from safe <b>defaults</b> in code." },
+    { path: ["file", "merged"], hl: ["merged"], set: { merged: "PORT 8080 · POOL 10 · LOG info" }, note: "Layer on the <b>config file</b>." },
+    { path: ["env", "merged"], hl: ["merged"], warn: ["env"], set: { merged: "PORT 8080 · POOL 50 · LOG info" }, note: "<b>Environment variables</b> override for this environment: production sets the pool to 50." },
+    { path: ["vault", "merged"], hl: ["merged"], set: { merged: "… + DATABASE_URL + STRIPE_KEY" }, note: "<b>Secrets</b> come last, fetched from the secret manager and never stored in files." },
+    { path: ["merged", "val"], tone: "ok", ok: ["val"], set: { merged: "… + DATABASE_URL + STRIPE_KEY", val: "✓ all valid → start" }, note: "Validate the merged result against a schema. Only then does the server start." }
+  ]
+});
+</script>
+</body>
+</html>
