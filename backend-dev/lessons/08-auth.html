@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Authentication & authorization · Backend Dev</title>
+<meta name="description" content="Sessions, JWTs, cookies, API keys, OAuth/OIDC, RBAC and the security details that matter.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="08">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 8</span><span>Video · 1:35:57</span></div>
+  <h1>Authentication and authorization</h1>
+  <p class="lead">Two questions. <strong>Authentication</strong>: who are you, in this context? <strong>Authorization</strong>: what are you allowed to do here? Every login screen, token and "403 Forbidden" is machinery for answering one of them.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>How authentication evolved from handshakes to tokens</li><li>Sessions, JWTs and cookies, and how they fit together</li><li>Stateful vs stateless auth, API keys, OAuth 2.0 and OpenID Connect</li><li>Role-based access control</li><li>Two security details: generic errors and timing attacks</li></ul></div>
+</div>
+<h2 id="two-questions">Who are you vs what can you do</h2>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>At a hotel, the front desk checks your ID: that's <strong>authentication</strong>. Your key card then opens <em>your</em> room and the gym, but not other guests' rooms or the staff office: that's <strong>authorization</strong>. Identity first, permissions second.</p></aside>
+
+<h2 id="history">A short history of proving who you are</h2>
+<p>Each era's method broke when the world grew, and the fix became the next era. Modern auth carries all of these ideas.</p>
+<figure class="anim" data-steps id="fig-history">
+  <figcaption class="anim-title">From handshakes to passkeys</figcaption>
+  <div class="frame" data-note="Trust was <b>personal</b>, and it didn't scale beyond people who knew each other.">
+    <div class="era"><span class="yr">Pre-industrial</span><div><h4>Implicit trust</h4><p>A respected village elder vouched for you; deals were sealed with a handshake.</p><span class="chip">based on: who knows you</span></div></div>
+  </div>
+  <div class="frame" data-note="Seals were the first widely used <b>authentication tokens</b>, and forging them was the first <b>bypass attack</b>.">
+    <div class="era"><span class="yr">Medieval</span><div><h4>Wax seals</h4><p>A unique seal on a letter proved who sent it. Forgeries led to watermarks and coded documents.</p><span class="chip">principle: something you <b>have</b></span></div></div>
+  </div>
+  <div class="frame" data-note="Telegraph operators used shared passphrases: <b>static passwords</b> before computers.">
+    <div class="era"><span class="yr">Industrial</span><div><h4>Passphrases &amp; shared secrets</h4><p>Pre-agreed phrases validated messages on the telegraph network.</p><span class="chip">principle: something you <b>know</b></span></div></div>
+  </div>
+  <div class="frame" data-note="Plain-text passwords leaked the moment someone printed the file. That incident gave birth to <b>secure password storage</b>.">
+    <div class="era"><span class="yr">1961</span><div><h4>Computer passwords</h4><p>MIT's CTSS time-sharing system introduced passwords for multiple users, stored in plain text. Someone printed the password file. Hashing followed.</p><span class="chip">lesson: never store passwords in plain text</span></div></div>
+  </div>
+  <div class="frame" data-note="Asymmetric cryptography is the backbone of modern auth (PKI). Kerberos tickets foreshadowed today's tokens.">
+    <div class="era"><span class="yr">1970s–80s</span><div><h4>Cryptography boom</h4><p>Diffie–Hellman key exchange let two parties agree on a secret over an untrusted network. Kerberos issued <em>tickets</em> from a trusted third party.</p><span class="chip">idea: tokens from a trusted issuer</span></div></div>
+  </div>
+  <div class="frame" data-note="Passwords alone fell to brute-force and dictionary attacks, so we started <b>layering</b> factors.">
+    <div class="era"><span class="yr">1990s</span><div><h4>Multi-factor authentication</h4><p>Combine something you know (password, PIN), something you have (card, OTP app) and something you are (fingerprint, retina).</p><span class="chip">principle: layers</span></div></div>
+  </div>
+  <div class="frame" data-note="Cloud, mobile and APIs demanded new tools. These are what you use today, and what comes next.">
+    <div class="era"><span class="yr">2000s →</span><div><h4>Tokens &amp; delegation</h4><p>OAuth, JWTs, zero-trust architecture and passwordless WebAuthn (keys stored in hardware). On the horizon: decentralised identity, behavioural biometrics and post-quantum cryptography.</p><span class="chip">today's toolbox</span></div></div>
+  </div>
+</figure>
+<h3>Hashing in one widget</h3>
+<p>A hash function turns any input into a <strong>fixed-length</strong> string. The same input always gives the same output, and you can't reverse it. Servers store the hash, then hash the password you type at login and compare.</p>
+<figure class="anim" id="fig-hash">
+  <figcaption class="anim-title">Try it: type a password</figcaption>
+  <div class="widget">
+    <div class="row">
+      <input type="text" id="hash-in" value="hunter2" aria-label="Password" style="flex:1;min-width:180px">
+      <label><input type="checkbox" id="hash-salt"> add a random salt</label>
+    </div>
+    <div class="tok" id="hash-out">…</div>
+    <p class="out" id="hash-meta" style="margin:8px 0 0"></p>
+  </div>
+</figure>
+<aside class="callout warn"><div class="tag">In real systems</div><p>Use a <strong>slow, salted</strong> password hash such as bcrypt or Argon2, not plain SHA-256. A random <strong>salt</strong> per user means two people with the same password get different hashes, which defeats precomputed lookup tables.</p></aside>
+
+<h2 id="building-blocks">The three building blocks</h2>
+<h3>1. Sessions: memory for a stateless protocol</h3>
+<p>HTTP forgets everything between requests (lesson 5). That was fine for static pages, but not for carts or staying logged in. A <strong>session</strong> is temporary, server-side memory about a user:</p>
+<ol>
+  <li>On login, the server creates a random <strong>session ID</strong> and stores it with the user's data (id, role, cart).</li>
+  <li>It sends only the ID to the browser, in a cookie.</li>
+  <li>Each later request carries the cookie; the server looks up the ID to know who you are.</li>
+  <li>Sessions <strong>expire</strong> (say after 15 minutes) and get recreated.</li>
+</ol>
+<p class="muted">Where sessions are stored has evolved: files on disk → databases (survive restarts) → in-memory stores like <strong>Redis</strong> and Memcached (fast, shared by many servers).</p>
+
+<h3>2. JWTs: the state travels with the request</h3>
+<p>By the mid-2000s, apps served millions of users across regions. Storing every session got expensive, and syncing sessions between servers worldwide added latency. <strong>JSON Web Tokens</strong> (standardised in 2015) offload the state: the token itself carries the user's claims, signed so nobody can tamper with them.</p>
+<figure class="anim" id="fig-jwt">
+  <figcaption class="anim-title">Try it: decode and tamper with a JWT</figcaption>
+  <div class="widget">
+    <div class="tok" id="jwt-token">signing…</div>
+    <div class="split" style="margin-top:12px">
+      <div><h5>Header: <span style="color:var(--bad)">algorithm</span></h5><pre id="jwt-h"></pre></div>
+      <div><h5>Payload: <span style="color:var(--accent)">claims</span></h5><pre id="jwt-p"></pre></div>
+    </div>
+    <div class="row" style="margin:12px 0 0">
+      <button class="act" type="button" id="jwt-tamper">Tamper: make me admin</button>
+      <button class="ghost" type="button" id="jwt-reset">Reset</button>
+      <span class="verdict ok" id="jwt-verdict">…</span>
+    </div>
+    <p class="out" id="jwt-why" style="margin:8px 0 0"></p>
+  </div>
+</figure>
+<ul>
+  <li><strong>Header</strong>: metadata, such as the signing algorithm.</li>
+  <li><strong>Payload</strong>: claims. <code>sub</code> is the user id, <code>iat</code> is when it was issued, plus optional fields such as name and role. It's only base64-encoded, so <strong>anyone can read it</strong>. Never put secrets here.</li>
+  <li><strong>Signature</strong>: made with a secret key only the server knows. Change one character of the payload and verification fails.</li>
+</ul>
+<div class="split">
+  <div class="card"><h4 style="color:var(--ok)">Why JWTs got popular</h4><p><strong>Stateless</strong>: no session storage. <strong>Scalable</strong>: any server with the secret can verify, which suits microservices. <strong>Portable</strong>: URL-safe and small, so they fit in headers and cookies.</p></div>
+  <div class="card"><h4 style="color:var(--bad)">The catch</h4><p><strong>Theft</strong>: a stolen token works until it expires. <strong>Revocation</strong>: you can't log out one user, except by rotating the secret, which logs out <em>everyone</em>.</p></div>
+</div>
+<p>The common patch is a <strong>hybrid</strong>: verify the JWT, then check a blocklist in Redis. But if you're doing a storage lookup on every request anyway, why not use stateful sessions in the first place? That question has no universal answer.</p>
+<aside class="callout ok"><div class="tag">Practical advice</div><p>Build auth yourself to <em>learn</em> the trade-offs. For a medium or large production system, prefer a dedicated auth provider (Auth0, Clerk and similar). Hashing, salting, token rotation and every security edge case are then their headache.</p></aside>
+
+<h3>3. Cookies: server-controlled storage in the browser</h3>
+<p>A cookie is a small value the <strong>server</strong> stores in the browser via a response header. The browser then <strong>automatically attaches it</strong> to every later request to that same server, and never sends it to other sites. That makes cookies the perfect carrier for a session ID or a token. Mark them <code>HttpOnly</code> so JavaScript can't read them.</p>
+
+<h2 id="types">Four ways to authenticate</h2>
+<h3>Stateful (sessions)</h3>
+<figure class="anim" id="fig-stateful">
+  <figcaption class="anim-title">Session-based login</figcaption>
+</figure>
+<h3>Stateless (JWT)</h3>
+<figure class="anim" id="fig-stateless">
+  <figcaption class="anim-title">Token-based login</figcaption>
+</figure>
+<div class="table-wrap"><table>
+  <thead><tr><th></th><th>Stateful</th><th>Stateless</th></tr></thead>
+  <tbody>
+    <tr><td>Pros</td><td>Central control; see every active session; <strong>instant revoke/logout</strong></td><td>Scales easily; no session store; great for distributed systems and mobile</td></tr>
+    <tr><td>Cons</td><td>Lookup on every request; harder across regions</td><td>Revocation is hard; stolen tokens stay valid until expiry</td></tr>
+    <tr><td>Best for</td><td>Most web apps (the safer default)</td><td>APIs, mobile apps, multi-region systems</td></tr>
+  </tbody>
+</table></div>
+<p>A sensible <strong>hybrid</strong>: stateful sessions for your browser app, stateless tokens for mobile clients and third-party integrations.</p>
+
+<h3>API keys: for machines, not people</h3>
+<p>Sessions and JWTs assume a human typing a password into a form. But what if <em>your server</em> wants to call OpenAI's API to summarise a paragraph? There's no human and no login screen. You generate an <strong>API key</strong> in the provider's dashboard (often with scopes and an expiry), store it as a secret, and send it with each request.</p>
+<figure class="anim" id="fig-apikey">
+  <figcaption class="anim-title">Machine-to-machine with an API key</figcaption>
+</figure>
+
+<h3>OAuth 2.0 and OpenID Connect</h3>
+<p>Two problems appeared as the web grew: <strong>password fatigue</strong> (dozens of accounts, reused weak passwords, one breach exposing many accounts) and <strong>delegation</strong> (a travel app wants to scan your Gmail for tickets; a social app wants your contacts). The first "solution" was handing over your password, which meant <em>full</em> access and no way to revoke it short of changing your password everywhere.</p>
+<p><strong>OAuth (2007)</strong> replaced shared passwords with <strong>tokens that carry specific permissions</strong> (scopes), such as "read contacts" but not delete them.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>OAuth is a <strong>valet key</strong>. It lets the valet drive and park your car, but not open the boot or the glovebox. You can take it back at any time, and you never handed over your house keys.</p></aside>
+<div class="cards c4">
+  <div class="card"><h4>Resource owner</h4><p>You, the user who owns the data.</p></div>
+  <div class="card"><h4>Client</h4><p>The app asking for access (e.g. Facebook).</p></div>
+  <div class="card"><h4>Authorization server</h4><p>Authenticates you and issues tokens (Google's login).</p></div>
+  <div class="card"><h4>Resource server</h4><p>Holds the data (Google Contacts API).</p></div>
+</div>
+<p><strong>OAuth 2.0 (~2010)</strong> simplified 1.0's error-prone cryptographic signatures with <strong>bearer tokens</strong>, and added flows for each kind of app:</p>
+<ul>
+  <li><strong>Authorization code</strong>: server-side apps (the standard choice).</li>
+  <li><strong>Implicit</strong>: browser apps. Now <em>discouraged</em> for security reasons.</li>
+  <li><strong>Client credentials</strong>: machine-to-machine, no user involved.</li>
+  <li><strong>Device code</strong>: devices without keyboards, like smart TVs.</li>
+</ul>
+<p>OAuth answers "what may this app do?", which is <em>authorization</em>. It never said <em>who you are</em>. <strong>OpenID Connect (2014)</strong> adds an <strong>ID token</strong> (a JWT with your id, name, email, issuer and login time) on top of OAuth 2.0. That's what powers "Sign in with Google".</p>
+<figure class="anim" id="fig-oidc">
+  <figcaption class="anim-title">"Sign in with Google" (OIDC authorization code flow)</figcaption>
+</figure>
+
+<h3>Which one when?</h3>
+<div class="table-wrap"><table>
+  <thead><tr><th>Method</th><th>Use it for</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Stateful</strong></td><td>Web apps and most SaaS products; user data stored server-side.</td></tr>
+    <tr><td><strong>Stateless</strong></td><td>APIs and distributed systems where the token carries the user info.</td></tr>
+    <tr><td><strong>OAuth / OIDC</strong></td><td>Third-party integrations and "log in with Google/GitHub/Discord".</td></tr>
+    <tr><td><strong>API keys</strong></td><td>Server-to-server and programmatic access.</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="authorization">Authorization and RBAC</h2>
+<p>Say your notes app moves deleted notes to a "dead zone" after 30 days, and you want an admin UI to inspect them. The tempting hack is a secret "god mode" string sent with admin requests. That's a disaster waiting to happen: intercept the string and someone can wipe the database. And to give access to a teammate, you'd have to share or multiply secret strings.</p>
+<p>The clean answer is <strong>role-based access control (RBAC)</strong>: users get <strong>roles</strong>, and roles get <strong>permissions</strong>.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Permission</th><th>user</th><th>moderator</th><th>admin</th></tr></thead>
+  <tbody>
+    <tr><td>Read own notes</td><td>✅</td><td>✅</td><td>✅</td></tr>
+    <tr><td>Write / delete own notes</td><td>✅</td><td>✅</td><td>✅</td></tr>
+    <tr><td>Moderate shared notes</td><td>—</td><td>✅</td><td>✅</td></tr>
+    <tr><td>View dead-zone notes</td><td>—</td><td>—</td><td>✅</td></tr>
+  </tbody>
+</table></div>
+<figure class="anim" id="fig-rbac">
+  <figcaption class="anim-title">Role check in the request pipeline</figcaption>
+</figure>
+
+<h2 id="security">Two details that matter</h2>
+<h3>Generic error messages</h3>
+<p>"User not found", "Incorrect password" and "Account locked" are friendly, and they're a gift to attackers. "User not found" tells them to try the next email; "Incorrect password" confirms the account exists, so they can brute-force just the password. In auth flows, always answer with one generic message: <strong>"Invalid credentials"</strong>. Save the friendly messages for validation errors elsewhere.</p>
+<h3>Timing attacks</h3>
+<p>A login usually: (1) finds the user, (2) checks whether the account is locked, (3) hashes the password and compares. If the email doesn't exist, it fails at step 1 and responds <em>fast</em>. If the password is wrong, it does the slow hash first. That timing difference leaks which part was wrong.</p>
+<figure class="anim" id="fig-timing">
+  <figcaption class="anim-title">Response time leaks information</figcaption>
+</figure>
+<p>Fixes: use <strong>constant-time comparison</strong> functions, and make failures take the same time, for example by hashing a dummy password or adding an equalising delay (<code>setTimeout</code>, <code>time.Sleep</code>).</p>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>Authentication = who you are; authorization = what you can do.</li>
+  <li>Never store plain-text passwords. Store slow, salted hashes and compare hashes at login.</li>
+  <li>Sessions keep state on the server (easy to revoke); JWTs carry signed state in the token (easy to scale, hard to revoke). Cookies carry either automatically.</li>
+  <li>Default to stateful sessions for web apps; use JWTs for APIs and mobile, API keys for machines, OAuth/OIDC for delegation and social login.</li>
+  <li>OAuth gives scoped tokens instead of passwords (a valet key); OIDC adds an ID token for identity.</li>
+  <li>RBAC maps users → roles → permissions; failing a check means 403.</li>
+  <li>Keep auth errors generic and response times constant.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>A user reports their account was hacked. With pure JWT auth, how do you kick the attacker out right now?</summary><div><p>You can't target one token. Your options are rotating the signing secret (logs out everyone) or adding a stateful check, such as a blocklist or a token version in the database. This is the main argument for sessions in web apps.</p></div></details>
+  <details><summary>Why is a JWT payload not a safe place for a user's password or API secrets?</summary><div><p>It's only base64url-encoded, not encrypted. Anyone holding the token can decode and read it. The signature prevents <em>tampering</em>, not <em>reading</em>.</p></div></details>
+  <details><summary>What does OpenID Connect add that OAuth 2.0 lacks?</summary><div><p>Authentication. OAuth issues access tokens for permissions; OIDC adds an ID token (a JWT) describing who the user is, which enables "Sign in with…".</p></div></details>
+  <details><summary>Which OAuth flow fits a nightly job on your server that syncs data with a partner's API?</summary><div><p>Client credentials: machine-to-machine, with no user in the loop.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+(function () {
+  var inp = document.getElementById("hash-in"), salt = document.getElementById("hash-salt");
+  var out = document.getElementById("hash-out"), meta = document.getElementById("hash-meta");
+  var saltVal = Math.random().toString(36).slice(2, 10);
+  var hasCrypto = window.crypto && crypto.subtle;
+  function hex(buf) { return Array.prototype.map.call(new Uint8Array(buf), function (b) { return ("0" + b.toString(16)).slice(-2); }).join(""); }
+  function run() {
+    if (!hasCrypto) { out.textContent = "Your browser blocks the Web Crypto API here (it needs HTTPS)."; return; }
+    var s = salt.checked ? saltVal + inp.value : inp.value;
+    crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)).then(function (d) {
+      var hx = hex(d);
+      out.textContent = hx;
+      meta.innerHTML = "Input: " + inp.value.length + " characters → output: <b>" + hx.length + " hex characters</b>, always." + (salt.checked ? " Salt <code>" + saltVal + "</code> was prepended, so the hash is completely different." : "");
+    });
+  }
+  inp.addEventListener("input", run); salt.addEventListener("change", run); run();
+})();
+
+(function () {
+  var el = function (id) { return document.getElementById(id); };
+  if (!(window.crypto && crypto.subtle)) { el("jwt-token").textContent = "Your browser blocks the Web Crypto API here (it needs HTTPS)."; return; }
+  var enc = new TextEncoder();
+  function b64u(bytes) { var s = ""; new Uint8Array(bytes).forEach(function (b) { s += String.fromCharCode(b); }); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
+  function b64uJson(o) { return b64u(enc.encode(JSON.stringify(o))); }
+  var header = { alg: "HS256", typ: "JWT" };
+  var payload = { sub: "user_123", name: "Ada", role: "user", iat: 1730000000 };
+  var keyP = crypto.subtle.importKey("raw", enc.encode("server-secret-key"), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  function sign(data) { return keyP.then(function (k) { return crypto.subtle.sign("HMAC", k, enc.encode(data)); }).then(b64u); }
+  var original;
+  function show(h, p, sig, pObj) {
+    el("jwt-token").innerHTML = '<span class="h">' + h + '</span><span class="dot-sep">.</span><span class="p">' + p + '</span><span class="dot-sep">.</span><span class="s">' + sig + "</span>";
+    el("jwt-h").textContent = JSON.stringify(header, null, 2);
+    el("jwt-p").textContent = JSON.stringify(pObj, null, 2);
+    return sign(h + "." + p).then(function (expect) {
+      var ok = expect === sig, v = el("jwt-verdict");
+      v.className = "verdict " + (ok ? "ok" : "bad");
+      v.textContent = ok ? "✓ Signature valid: request allowed" : "✕ Signature invalid: 401 Unauthorized";
+      el("jwt-why").innerHTML = ok
+        ? "The server re-computes the signature over <code>header.payload</code> with its secret. It matches, so it trusts the claims, with no database lookup."
+        : "The payload now says <code>admin</code>, but the signature was made for the old payload. Without the server's secret, the attacker can't produce a matching signature.";
+    });
+  }
+  function reset() {
+    var h = b64uJson(header), p = b64uJson(payload);
+    sign(h + "." + p).then(function (sig) { original = { h: h, p: p, sig: sig }; show(h, p, sig, payload); });
+  }
+  el("jwt-tamper").addEventListener("click", function () {
+    if (!original) return;
+    var evil = Object.assign({}, payload, { role: "admin" });
+    show(original.h, b64uJson(evil), original.sig, evil);
+  });
+  el("jwt-reset").addEventListener("click", reset);
+  reset();
+})();
+
+BD.seq("#fig-stateful", {
+  actors: ["Browser", "Server", "Redis"],
+  colW: 230,
+  steps: [
+    { from: 0, to: 1, label: "POST /login {email, password}", note: "The user submits credentials." },
+    { from: 1, to: 1, label: "hash & compare password", note: "The server hashes the password and compares it with the stored hash." },
+    { from: 1, to: 2, label: "SET sess:9f2a → {id, role} TTL 15m", note: "It creates a random <b>session ID</b> and stores the user's data under it, with an expiry." },
+    { from: 1, to: 0, label: "200 · Set-Cookie: sid=9f2a; HttpOnly", ret: true, tone: "ok", note: "Only the ID goes back, in an <b>HttpOnly cookie</b> that JavaScript can't read." },
+    { from: 0, to: 1, label: "GET /notes · Cookie: sid=9f2a", note: "The browser attaches the cookie <b>automatically</b> on every later request." },
+    { from: 1, to: 2, label: "GET sess:9f2a", note: "The server looks up the session…" },
+    { from: 2, to: 1, label: "{id: 42, role: user}", ret: true, note: "…and now knows who's calling." },
+    { from: 1, to: 0, label: "200 · notes", ret: true, tone: "ok", note: "The request succeeds. To log someone out or revoke access, delete the key: <b>instant</b>." }
+  ]
+});
+
+BD.seq("#fig-stateless", {
+  actors: ["Client", "Server"],
+  colW: 360,
+  steps: [
+    { from: 0, to: 1, label: "POST /login {email, password}", note: "Same start: credentials are checked." },
+    { from: 1, to: 1, label: "sign JWT {sub: 42, role} with secret", note: "The server builds a token containing the user's claims and <b>signs</b> it with its secret key." },
+    { from: 1, to: 0, label: "200 · { token: eyJhbGci… }", ret: true, tone: "ok", note: "The client stores the token (ideally in a secure cookie)." },
+    { from: 0, to: 1, label: "GET /notes · Authorization: Bearer eyJ…", note: "Later requests send it, conventionally in the <code>Authorization</code> header." },
+    { from: 1, to: 1, label: "verify signature → sub = 42", tone: "ok", note: "The server only checks the signature. <b>No storage lookup</b>: everything it needs is inside the token." },
+    { from: 1, to: 0, label: "200 · notes", ret: true, tone: "ok", note: "Any server with the secret could have handled this, which is why it scales so well." }
+  ]
+});
+
+BD.flow("#fig-apikey", {
+  w: 720, h: 200,
+  nodes: {
+    u: { x: 75, y: 100, label: "User", sub: "types text", kind: "client", w: 100 },
+    ui: { x: 225, y: 100, label: "Your UI", kind: "client", w: 110 },
+    srv: { x: 410, y: 100, label: "Your server", sub: "key in env var", kind: "server", w: 140 },
+    ai: { x: 620, y: 100, label: "OpenAI API", sub: "checks key, quota", kind: "ext", w: 150 }
+  },
+  edges: [["u", "ui"], ["ui", "srv"], ["srv", "ai"]],
+  steps: [
+    { path: ["u", "ui", "srv"], packet: "summarize this", hl: ["srv"], note: "A user asks <i>your</i> app to summarise a paragraph." },
+    { path: ["srv", "ai"], packet: "Bearer sk-…", hl: ["ai"], note: "Your server calls OpenAI with an <b>API key</b>. No human, no login form: machine to machine." },
+    { path: ["ai"], hl: ["ai"], set: { ai: "key → your plan ✓" }, note: "The provider maps the key to your account, plan, permissions and remaining quota." },
+    { path: ["ai", "srv", "ui", "u"], tone: "ok", packet: "summary", ok: ["u"], note: "The result flows back through your server to your UI." }
+  ]
+});
+
+BD.seq("#fig-oidc", {
+  actors: ["You (browser)", "Notes app", "Google auth", "Google API"],
+  colW: 175, rowH: 42,
+  steps: [
+    { from: 0, to: 1, label: "Sign in with Google", note: "You click the button in a notes app (the <b>client</b>)." },
+    { from: 1, to: 0, label: "redirect → Google, scope=openid email keep", ret: true, note: "The app redirects you to Google with its <code>client_id</code> and the <b>scopes</b> it wants." },
+    { from: 0, to: 2, label: "log in + consent", note: "You log in <b>on Google</b>, never on the notes app, and approve the requested permissions." },
+    { from: 2, to: 0, label: "redirect back ?code=xyz", ret: true, note: "Google sends you back with a short-lived <b>authorization code</b>." },
+    { from: 0, to: 1, label: "GET /callback?code=xyz", note: "The browser delivers the code to the app's server." },
+    { from: 1, to: 2, label: "exchange code + client secret", note: "Server to server, the app trades the code (plus its own secret) for tokens." },
+    { from: 2, to: 1, label: "access_token + id_token (JWT)", ret: true, tone: "ok", note: "It gets an <b>access token</b> (permissions) and an <b>ID token</b> (identity)." },
+    { from: 1, to: 1, label: "read ID token → who you are", tone: "ok", note: "The ID token's claims (id, email, name) log you in. That's the OIDC part." },
+    { from: 1, to: 3, label: "GET notes · Bearer access_token", note: "With the access token, the app calls Google's API <b>on your behalf</b>…" },
+    { from: 3, to: 1, label: "your Keep notes (only what you allowed)", ret: true, tone: "ok", note: "…but only within the scopes you granted. Revoke it any time from your Google account." }
+  ]
+});
+
+BD.flow("#fig-rbac", {
+  w: 720, h: 240,
+  nodes: {
+    c: { x: 70, y: 120, label: "Request", sub: "", kind: "client", w: 110 },
+    auth: { x: 235, y: 120, label: "Auth middleware", sub: "who? role?", kind: "server", w: 150 },
+    rbac: { x: 420, y: 120, label: "Permission check", sub: "needs: admin", kind: "server", w: 150 },
+    h: { x: 620, y: 55, label: "Handler", sub: "dead-zone notes", kind: "cache", w: 150 },
+    f: { x: 620, y: 185, label: "403 Forbidden", sub: "", kind: "ext", w: 150 }
+  },
+  edges: [["c", "auth"], ["auth", "rbac"], ["rbac", "h"], ["rbac", "f"]],
+  steps: [
+    { path: ["c", "auth"], packet: "GET /admin/dead-zone", set: { c: "token: Ada" }, hl: ["auth"], note: "Ada (role <b>user</b>) requests the admin-only dead-zone notes." },
+    { path: ["auth", "rbac"], set: { c: "token: Ada", auth: "Ada · role=user" }, hl: ["rbac"], note: "Auth middleware identifies her and attaches her <b>role</b> to the request context." },
+    { path: ["rbac", "f"], tone: "bad", set: { c: "token: Ada", auth: "Ada · role=user" }, bad: ["f"], note: "The route requires <code>admin</code>, so it stops here: <b>403 Forbidden</b>." },
+    { path: ["c", "auth", "rbac"], packet: "GET /admin/dead-zone", set: { c: "token: Sam", auth: "Sam · role=admin" }, hl: ["rbac"], note: "Sam has the <b>admin</b> role." },
+    { path: ["rbac", "h"], tone: "ok", set: { c: "token: Sam", auth: "Sam · role=admin" }, ok: ["h"], note: "Permission granted: the handler runs. Giving a teammate access is now just assigning a role." }
+  ]
+});
+
+BD.timeline("#fig-timing", {
+  lanes: ["Unknown email", "Wrong password", "Fixed: unknown", "Fixed: wrong pw"],
+  total: 300, unit: "ms", ticks: 6, labelW: 130,
+  legend: [{ k: "db", label: "find user" }, { k: "server", label: "check lock" }, { k: "cpu", label: "hash password (slow)" }, { k: "wait", label: "equalising work" }, { k: "bad", label: "respond" }],
+  segs: [
+    { lane: 0, s: 0, d: 20, k: "db" }, { lane: 0, s: 20, d: 15, k: "bad", t: "" },
+    { lane: 1, s: 0, d: 20, k: "db" }, { lane: 1, s: 20, d: 10, k: "server" }, { lane: 1, s: 30, d: 220, k: "cpu", t: "bcrypt" }, { lane: 1, s: 250, d: 15, k: "bad" },
+    { lane: 2, s: 0, d: 20, k: "db" }, { lane: 2, s: 20, d: 230, k: "wait", t: "dummy hash" }, { lane: 2, s: 250, d: 15, k: "bad" },
+    { lane: 3, s: 0, d: 20, k: "db" }, { lane: 3, s: 20, d: 10, k: "server" }, { lane: 3, s: 30, d: 220, k: "cpu", t: "bcrypt" }, { lane: 3, s: 250, d: 15, k: "bad" }
+  ],
+  steps: [
+    { to: 40, note: "An <b>unknown email</b> fails at step 1 and answers in ~35 ms." },
+    { to: 265, note: "A <b>wrong password</b> takes ~265 ms because of the slow hash. An attacker now knows which emails exist." },
+    { to: 300, note: "<b>Fixed:</b> both paths do the same amount of work (or wait the same time), so the timings are indistinguishable." }
+  ]
+});
+</script>
+</body>
+</html>

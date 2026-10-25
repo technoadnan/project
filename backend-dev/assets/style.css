@@ -431,3 +431,18 @@ pre mark { background: var(--accent-soft); color: inherit; border-radius: 4px; p
 .lanes3 pre { margin: 0; font-size: 12px; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .lanes3 .empty { color: var(--faint); font-size: 13px; font-style: italic; }
 @media (max-width: 720px) { .lanes3 { grid-template-columns: minmax(0, 1fr); } }
+
+/* tokens & hashes */
+.tok { font-family: var(--mono); font-size: 13px; line-height: 1.6; word-break: break-all; padding: 12px 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; }
+.tok .h { color: var(--bad); }
+.tok .p { color: var(--accent); }
+.tok .s { color: var(--c-cache); }
+.tok .dot-sep { color: var(--text); font-weight: 700; }
+.verdict { display: inline-flex; align-items: center; gap: 8px; font-weight: 650; font-size: 14px; padding: 6px 12px; border-radius: 9px; }
+.verdict.ok { background: var(--ok-soft); color: var(--ok); }
+.verdict.bad { background: var(--bad-soft); color: var(--bad); }
+.era { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; align-items: start; }
+.era .yr { font-family: var(--mono); font-size: 12.5px; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 8px; padding: 4px 9px; white-space: nowrap; }
+.era h4 { margin: 0 0 4px; font-size: 17px; }
+.era p { margin: 0 0 6px; color: var(--muted); font-size: 15px; }
+.era .principle { font-size: 13px; }
