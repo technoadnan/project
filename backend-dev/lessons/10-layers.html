@@ -195,7 +195,7 @@ BD.flow("#fig-short", {
     { path: ["c", "rl", "auth", "h"], tone: "ok", packet: "GET /notes", ok: ["h"], set: { h: "runs ✓" }, note: "Normal case: each middleware calls <code>next()</code> and the handler runs." },
     { path: ["c", "rl", "auth"], packet: "expired token", bad: ["auth"], set: { auth: "invalid ✕" }, note: "An expired token: the auth middleware doesn't call <code>next()</code>…" },
     { path: ["auth", "rl", "c"], tone: "bad", packet: "401", bad: ["auth"], set: { auth: "invalid ✕" }, note: "…it responds <b>401 Unauthorized</b> immediately. The handler never runs." },
-    { path: ["c", "rl"], packet: "request #31", warn: ["rl"], set: { rl: "31 in 2s ✕" }, note: "A client floods the API: request #31 inside two seconds…" },
+    { path: ["c", "rl"], packet: "request #31", fresh: true, warn: ["rl"], set: { rl: "31 in 2s ✕" }, note: "A client floods the API: request #31 inside two seconds…" },
     { path: ["rl", "c"], tone: "warn", packet: "429", warn: ["rl"], set: { rl: "31 in 2s ✕" }, note: "…gets <b>429 Too Many Requests</b> from the rate limiter, before auth even runs." }
   ]
 });

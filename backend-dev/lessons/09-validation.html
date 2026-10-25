@@ -124,7 +124,7 @@ BD.flow("#fig-why", {
   steps: [
     { path: ["c", "v", "ctl", "svc", "repo", "db"], packet: "name: 0", dim: ["v"], set: { v: "(skipped)" }, warn: ["db"], note: "<b>Without validation</b>, <code>{name: 0}</code> sails through every layer into an INSERT." },
     { path: ["db", "repo", "svc", "ctl", "c"], tone: "bad", packet: "500", dim: ["v"], set: { v: "(skipped)", db: "type error ✕" }, bad: ["db", "c"], note: "Postgres rejects a number for a text column. The user sees <b>500 Internal Server Error</b>, a server failure for a client mistake." },
-    { path: ["c", "v"], packet: "name: 0", set: { v: "name: string 5–100" }, hl: ["v"], note: "<b>With validation</b>, the schema is checked first: name must be a string of 5–100 characters." },
+    { path: ["c", "v"], packet: "name: 0", fresh: true, set: { v: "name: string 5–100" }, hl: ["v"], note: "<b>With validation</b>, the schema is checked first: name must be a string of 5–100 characters." },
     { path: ["v", "c"], tone: "warn", packet: "400", set: { v: "✕ expected string" }, warn: ["v"], note: "It fails fast with <b>400 Bad Request</b>: \"name: expected string, received number\". Nothing else runs." }
   ]
 });
@@ -222,7 +222,7 @@ BD.flow("#fig-front", {
   edges: [["form", "v"], ["pm", "v"], ["v", "svc"]],
   steps: [
     { path: ["form"], packet: "bad email", warn: ["form"], set: { form: "✕ invalid email" }, note: "A user types a bad email. The <b>frontend</b> catches it instantly and no request is sent. Good UX." },
-    { path: ["form", "v", "svc"], packet: "valid", tone: "ok", ok: ["svc"], note: "They fix it; the request passes server validation too." },
+    { path: ["form", "v", "svc"], packet: "valid", tone: "ok", fresh: true, set: { form: "valid ✓" }, ok: ["svc"], note: "They fix it; the request passes server validation too." },
     { path: ["pm", "v"], packet: "bad email", hl: ["v"], note: "Someone calls the API <b>directly</b>. No form, no frontend checks." },
     { path: ["v", "pm"], tone: "warn", packet: "400", warn: ["v"], set: { v: "✕ caught here" }, note: "Only <b>server-side validation</b> stands between them and your data. That's why it's mandatory." }
   ]
