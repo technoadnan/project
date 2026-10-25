@@ -404,3 +404,21 @@ pre mark { background: var(--accent-soft); color: inherit; border-radius: 4px; p
 .meter.warn i { background: var(--warn); }
 .meter.ok i { background: var(--ok); }
 .meter.bad i { background: var(--bad); }
+
+/* route-table widget */
+.rt { width: 100%; border-collapse: separate; border-spacing: 0 4px; font-family: var(--mono); font-size: 13px; margin: 4px 0 0; }
+.rt td { padding: 7px 10px; border: 1px solid transparent; border-width: 1px 0; background: var(--surface-2); transition: background .25s ease, color .25s ease, opacity .25s ease; }
+.rt td:first-child { border-left-width: 1px; border-radius: 8px 0 0 8px; width: 70px; font-weight: 600; }
+.rt td:last-child { border-right-width: 1px; border-radius: 0 8px 8px 0; color: var(--muted); text-align: right; }
+.rt tr.checking td { background: var(--accent-soft); border-color: var(--accent); }
+.rt tr.miss td { opacity: .45; }
+.rt tr.hit td { background: var(--ok-soft); border-color: var(--ok); color: var(--text); }
+.rt tr.hit td:last-child { color: var(--ok); font-weight: 600; }
+.url-anatomy { font-family: var(--mono); font-size: 15px; line-height: 2.4; padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow-x: auto; white-space: nowrap; }
+.url-anatomy span { padding: 3px 4px; border-radius: 6px; position: relative; }
+.url-anatomy .u-static { background: var(--surface-2); }
+.url-anatomy .u-param { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.url-anatomy .u-query { background: var(--warn-soft); color: var(--warn); font-weight: 600; }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.presets button { appearance: none; font: 12.5px var(--mono); cursor: pointer; padding: 5px 9px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); }
+.presets button:hover { border-color: var(--accent); color: var(--accent); }
