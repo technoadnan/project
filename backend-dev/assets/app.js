@@ -322,17 +322,20 @@
     if (!fig) return;
     var A = cfg.actors.length, steps = cfg.steps;
     var stage = makeFigure(fig, A > 3);
-    var pad = cfg.pad || 80, colW = cfg.colW || 175, rowH = cfg.rowH || 44, top = 70;
+    var colW = cfg.colW || 175, rowH = cfg.rowH || 44, top = 70;
+    var boxW = cfg.actors.map(function (name) { return Math.min(colW - 18, Math.max(96, name.length * 8 + 26)); });
+    var pad = Math.max(cfg.pad || 80, boxW[0] / 2 + 6, boxW[A - 1] / 2 + 6);
     var W = Math.max(cfg.minW || 560, pad * 2 + colW * (A - 1));
     var H = top + steps.length * rowH + 14;
     var X = function (a) { return A === 1 ? W / 2 : pad + a * (W - 2 * pad) / (A - 1); };
     var id = "sq" + (++uid);
     var s = svg("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": cfg.aria || "Sequence diagram" }, stage);
+    s.style.maxWidth = W + "px";
     markers(s, id);
     cfg.actors.forEach(function (name, a) {
       svg("line", { x1: X(a), y1: 44, x2: X(a), y2: H - 4, "class": "seq-life" }, s);
       var g = svg("g", { "class": "seq-actor" }, s);
-      var bw = Math.min(colW - 18, Math.max(96, name.length * 8 + 26));
+      var bw = boxW[a];
       svg("rect", { x: X(a) - bw / 2, y: 6, width: bw, height: 36, rx: 9 }, g);
       text(g, X(a), 29, name, { "text-anchor": "middle" });
     });
@@ -348,10 +351,10 @@
         svg("rect", { x: (x1 + x2) / 2 - tw / 2, y: y - 14, width: tw, height: 26, rx: 6 }, ng);
         text(ng, (x1 + x2) / 2, y + 4, st.text, { "text-anchor": "middle" });
       } else if (st.from === st.to) {
-        var x = X(st.from);
-        line = svg("path", { d: "M" + x + "," + (y - 10) + " h34 v18 h-30" }, g);
-        text(g, x + 42, y + 3, st.label, {});
-        pts = [[x, y - 10], [x + 34, y - 10], [x + 34, y + 8], [x + 4, y + 8]];
+        var x = X(st.from), sd = st.from === A - 1 && A > 1 ? -1 : 1;
+        line = svg("path", { d: "M" + x + "," + (y - 10) + " h" + (34 * sd) + " v18 h" + (-30 * sd) }, g);
+        text(g, x + 42 * sd, y + 3, st.label, { "text-anchor": sd > 0 ? "start" : "end" });
+        pts = [[x, y - 10], [x + 34 * sd, y - 10], [x + 34 * sd, y + 8], [x + 4 * sd, y + 8]];
       } else {
         var xa = X(st.from), xb = X(st.to), dir = xb > xa ? 1 : -1;
         line = svg("line", { x1: xa + dir * 3, y1: y + 6, x2: xb - dir * 4, y2: y + 6 }, g);
@@ -389,6 +392,7 @@
     if (cfg.minW) stage.classList.add("scroll");
     var s = svg("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": cfg.aria || "Animated diagram", "class": cfg.fit ? "fit" : null }, stage);
     if (cfg.minW) s.style.minWidth = cfg.minW + "px";
+    s.style.maxWidth = W * 1.1 + "px";
     var nodes = {}, edges = [];
     Object.keys(cfg.nodes).forEach(function (k) {
       var n = Object.assign({ w: 128, h: 54, kind: "server" }, cfg.nodes[k]);
