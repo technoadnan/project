@@ -204,11 +204,11 @@ BD.flow("#fig-global", {
   steps: [
     { path: ["c", "h"], packet: "POST /books (700-char name)", bad: ["h"], set: { h: "✕ name > 500 chars" }, note: "A book name of 700 characters breaks the 500-character rule in the handler's <b>validation</b>." },
     { path: ["h", "geh", "c"], tone: "warn", packet: "400", set: { h: "✕ name > 500 chars", geh: "ValidationError → 400" }, hl: ["geh"], note: "It's thrown up to the global handler: <b>400 Bad Request</b> with field errors the user can fix." },
-    { path: ["c", "h", "s", "r"], packet: "POST /books", bad: ["r"], set: { r: "✕ unique_violation" }, note: "Next request: valid input, but the INSERT hits a <b>unique constraint</b>. That name already exists." },
+    { path: ["c", "h", "s", "r"], packet: "POST /books", fresh: true, bad: ["r"], set: { r: "✕ unique_violation" }, note: "Next request: valid input, but the INSERT hits a <b>unique constraint</b>. That name already exists." },
     { path: ["r", "geh", "c"], tone: "warn", packet: "409", set: { r: "✕ unique_violation", geh: "unique → 409 \"already exists\"" }, hl: ["geh"], note: "It bubbles up unchanged and is mapped to <b>409 Conflict</b> (or 400): \"Book already exists\"." },
-    { path: ["c", "h", "s", "r"], packet: "GET /books/123", bad: ["r"], set: { r: "✕ no rows" }, note: "<code>GET /books/123</code>: the SELECT returns <b>no rows</b>…" },
+    { path: ["c", "h", "s", "r"], packet: "GET /books/123", fresh: true, bad: ["r"], set: { r: "✕ no rows" }, note: "<code>GET /books/123</code>: the SELECT returns <b>no rows</b>…" },
     { path: ["r", "geh", "c"], tone: "warn", packet: "404", set: { r: "✕ no rows", geh: "no rows → 404" }, hl: ["geh"], note: "…which the handler maps to <b>404</b>: \"Book 123 not found\"." },
-    { path: ["c", "h", "s"], packet: "GET /books", bad: ["s"], set: { s: "✕ TypeError (bug)" }, note: "Finally, an unexpected bug in the service: a type error nobody anticipated." },
+    { path: ["c", "h", "s"], packet: "GET /books", fresh: true, bad: ["s"], set: { s: "✕ TypeError (bug)" }, note: "Finally, an unexpected bug in the service: a type error nobody anticipated." },
     { path: ["s", "geh", "c"], tone: "bad", packet: "500", set: { s: "✕ TypeError (bug)", geh: "unknown → log + 500" }, bad: ["geh"], note: "Unknown errors are <b>logged in full</b> (with the request ID) but the client only sees <b>500 \"Something went wrong\"</b>. No internals leak." }
   ]
 });

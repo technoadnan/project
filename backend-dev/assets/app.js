@@ -455,7 +455,9 @@
         var st = steps[i] || {};
         var subs = {};
         Object.keys(nodes).forEach(function (k) { subs[k] = nodes[k].sub || ""; });
-        for (var j = 0; j <= i; j++) if (steps[j].set) Object.assign(subs, steps[j].set);
+        var from = 0;
+        for (var f = 0; f <= i; f++) if (steps[f].fresh) from = f;
+        for (var j = from; j <= i; j++) if (steps[j].set) Object.assign(subs, steps[j].set);
         Object.keys(nodes).forEach(function (k) {
           var n = nodes[k];
           n.subEl.textContent = subs[k];
