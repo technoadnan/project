@@ -527,3 +527,11 @@ pre mark { background: var(--accent-soft); color: inherit; border-radius: 4px; p
 .rg-bar .skip { background: repeating-linear-gradient(135deg, var(--surface-2) 0 6px, var(--surface) 6px 12px); }
 .rg-bar .get { background: var(--accent); }
 @media (max-width: 600px) { .up-grid { grid-template-columns: repeat(15, minmax(0, 1fr)); } }
+.memory.wide .lvl { grid-template-columns: 100px minmax(0, 1fr) 230px; }
+@media (max-width: 600px) { .memory.wide .lvl { grid-template-columns: 90px minmax(0, 1fr); } .memory.wide .lvl span:last-child { grid-column: 1 / -1; margin-top: -4px; } }
+.fr-bits { display: grid; grid-template-columns: 1fr 1.6fr 2.6fr 1fr 4fr; gap: 4px; font-family: var(--mono); }
+.fr-bits > div { border: 1px solid var(--border); border-radius: 8px; padding: 6px 4px; text-align: center; background: var(--surface-2); min-width: 0; }
+.fr-bits > div.on { border-color: var(--accent); background: var(--accent-soft); }
+.fr-bits b { display: block; font-size: 14px; letter-spacing: .08em; }
+.fr-bits small { display: block; font: 11px var(--font); color: var(--muted); margin-top: 2px; }
+@media (max-width: 600px) { .fr-bits { grid-template-columns: 1fr 1.4fr 2fr 1.2fr 3fr; } .fr-bits small { font-size: 9.5px; overflow-wrap: anywhere; } .fr-bits b { font-size: 12px; letter-spacing: 0; } }
