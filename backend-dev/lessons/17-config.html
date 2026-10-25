@@ -167,14 +167,14 @@ BD.flow("#fig-flags", {
 });
 
 BD.flow("#fig-layers", {
-  w: 720, h: 270,
+  w: 720, h: 295,
   nodes: {
     def: { x: 95, y: 45, label: "Defaults in code", sub: "PORT=8080 · POOL=10", kind: "ext", w: 170, h: 48 },
     file: { x: 95, y: 115, label: "config.yaml", sub: "LOG_LEVEL=info", kind: "ext", w: 170, h: 48 },
     env: { x: 95, y: 185, label: "Env vars", sub: "POOL=50", kind: "ext", w: 170, h: 48 },
     vault: { x: 95, y: 250, label: "Secret manager", sub: "DATABASE_URL · STRIPE_KEY", kind: "ext", w: 200, h: 40 },
-    merged: { x: 400, y: 150, label: "Runtime config", sub: "{ }", kind: "cache", w: 180, h: 70 },
-    val: { x: 615, y: 150, label: "Validate", sub: "schema", kind: "server", w: 120 }
+    merged: { x: 410, y: 150, label: "Runtime config", sub: "{ }", kind: "cache", w: 225, h: 70 },
+    val: { x: 638, y: 150, label: "Validate", sub: "schema", kind: "server", w: 120 }
   },
   edges: [["def", "merged"], ["file", "merged"], ["env", "merged"], ["vault", "merged"], ["merged", "val"]],
   steps: [
