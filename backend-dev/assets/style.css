@@ -497,3 +497,17 @@ pre mark { background: var(--accent-soft); color: inherit; border-radius: 4px; p
 .lb-row small { display: block; font-size: 12px; color: var(--muted); margin-top: 3px; }
 @media (max-width: 600px) { .lb-row { grid-template-columns: minmax(0, 1fr); gap: 4px; } }
 @media (max-width: 600px) { .lb-row { grid-template-columns: minmax(0, 1fr) auto; } .lb-row > div:nth-child(2) { grid-column: 1 / -1; order: 3; } }
+.gsched { display: grid; gap: 10px; padding: 14px 16px; }
+.gsched .m { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gsched .m > b { width: 120px; font-size: 13px; color: var(--muted); }
+.g { font: 12.5px var(--mono); padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); }
+.g.run { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.g.park { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
+.g.done { opacity: .5; text-decoration: line-through; }
+.race { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 14px; align-items: center; }
+.race .card h4 { margin: 0 0 4px; }
+.race .shared { text-align: center; padding: 0 6px; }
+.race .big { font: 700 44px var(--mono); line-height: 1.1; color: var(--text); }
+.race button[disabled] { opacity: .55; cursor: not-allowed; }
+@media (max-width: 600px) { .race { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 600px) { .gsched .m > b { width: 100%; } }

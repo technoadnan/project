@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Concurrency & parallelism · Backend Dev</title>
+<meta name="description" content="Threads, event loops, goroutines and when more cores actually help.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="23">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 22</span><span>Video · 1:28:06</span></div>
+  <h1>Concurrency & parallelism: IO-bound vs CPU-bound</h1>
+  <p class="lead">A server that handles one request at a time can't serve a thousand users. This lesson builds the mental model behind <code>async</code>/<code>await</code>, threads and goroutines: where a request's time actually goes, the difference between <strong>concurrency</strong> and <strong>parallelism</strong>, how threads, event loops and Go's scheduler each juggle work, and the bugs that shared state brings.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Why backends are mostly IO-bound</li><li>Concurrency vs parallelism</li><li>OS threads and what they cost</li><li>The event loop, callbacks and what await really does</li><li>Goroutines and virtual threads</li><li>Race conditions, locks and channels</li></ul></div>
+</div>
+<h2 id="waiting">Where does a request's time go?</h2>
+<p>A handler sends a query to the database and waits. Locally that wait is 1–2 ms; in another availability zone, 20–30 ms; in another region, around 100 ms. If the server handles one request at a time, its CPU does <strong>nothing</strong> during that wait.</p>
+<p>That's a lot of nothing. A modern CPU core executes roughly <strong>3 billion instructions per second</strong>, 3 million per millisecond. A 100 ms wait wastes the chance to run 300 million instructions.</p>
+<figure class="anim" id="fig-wait">
+  <figcaption class="anim-title">One typical API call, millisecond by millisecond</figcaption>
+</figure>
+<p>Anything that waits on something outside the CPU (network, database, disk, the terminal) is <strong>IO</strong>, input/output. In a typical backend, well over 70% of the time goes to IO. Using that idle time is the problem <strong>concurrency</strong> solves.</p>
+
+<h2 id="concurrency-vs-parallelism">Concurrency vs parallelism</h2>
+<div class="split">
+  <div class="card"><h4>Concurrency: dealing with many things</h4><p>Structuring a program so tasks can <strong>start, pause and resume</strong>: while one waits on IO, another uses the CPU. Works on a <strong>single core</strong>. Both tasks are "in progress", but at any instant only one runs.</p></div>
+  <div class="card"><h4>Parallelism: doing many things</h4><p>Executing instructions <strong>at the same instant</strong>. One core runs one instruction stream at a time, so parallelism needs <strong>hardware</strong>: two cores for two things at once.</p></div>
+</div>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>One chef puts pasta water on to boil and chops salad while it heats: that's <strong>concurrency</strong>, one person juggling several dishes by never standing idle. Two chefs cooking side by side is <strong>parallelism</strong>. A kitchen that's mostly waiting on ovens needs a good juggler more than a second chef.</p></aside>
+<figure class="anim" id="fig-cvp">
+  <figcaption class="anim-title">Two requests arrive together</figcaption>
+</figure>
+
+<h2 id="io-vs-cpu">IO-bound vs CPU-bound</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th></th><th>IO-bound</th><th>CPU-bound</th></tr></thead>
+  <tbody>
+    <tr><td>Time spent</td><td>Waiting for something external</td><td>Actually computing</td></tr>
+    <tr><td>Examples</td><td>Database queries, HTTP calls to other services, Redis, files, logging</td><td>Image and video processing, encryption and hashing, ML, heavy number crunching</td></tr>
+    <tr><td>Needs</td><td><strong>Concurrency</strong>: keep the CPU busy with other requests while you wait</td><td><strong>Parallelism</strong>: spread the work across cores to finish sooner</td></tr>
+  </tbody>
+</table></div>
+<p>Validating input or parsing JSON is CPU work too, but usually done in a millisecond or two. Most backends are <strong>IO-bound</strong>: whether you have one core or eight, the bottleneck is waiting. You still want parallelism for the occasional heavy job.</p>
+<p>Under every language's concurrency feature (Go's goroutines, JavaScript's <code>async</code>/<code>await</code>, Java's virtual threads) sit two basic mechanisms: <strong>threads</strong> and <strong>event loops</strong>.</p>
+
+<h2 id="threads">Threads</h2>
+<p>A <strong>thread</strong> is an independent line of execution managed by the operating system. For each one the OS creates a <strong>stack</strong> (the chain of function calls and their local variables) and an <strong>instruction pointer</strong> (where it is in the code). The OS <strong>scheduler</strong> gives each thread a time slice of a few milliseconds, then pauses it, saves its state and switches to the next, whether the thread likes it or not. That's <strong>preemptive scheduling</strong>.</p>
+<p>When a thread hits a blocking operation like reading a database socket, the OS marks it <strong>blocked</strong> and runs another thread. When the data arrives, the thread becomes <strong>runnable</strong> again and waits for its next turn.</p>
+<div class="split">
+  <div class="card"><h4>Shared memory</h4><p>Processes are isolated: one can't read another's memory. Threads in the <strong>same process</strong> share the heap and globals, so they communicate just by reading and writing the same data: fast (no copying, no serialization) and dangerous, as you'll see below.</p></div>
+  <div class="card"><h4>True parallelism</h4><p>With several cores, several threads run at the same instant, which is exactly what CPU-bound work needs.</p></div>
+</div>
+<h3>What threads cost</h3>
+<ul>
+  <li><strong>Memory.</strong> Each thread gets its own stack: 8 MB of virtual memory by default on Linux, with real memory allocated as it's used. Even at ~1 MB each, 10,000 threads need ~10 GB.</li>
+  <li><strong>Creation.</strong> A system call into the kernel to allocate the stack and bookkeeping: microseconds to milliseconds.</li>
+  <li><strong>Context switches.</strong> Saving one thread's registers and restoring another's costs ~1–10 µs each. With hundreds or thousands of threads on a few cores, that pure overhead adds up to milliseconds.</li>
+</ul>
+<figure class="anim" id="fig-mem">
+  <figcaption class="anim-title">Try it: one execution unit per concurrent request</figcaption>
+  <div class="widget">
+    <div class="row"><label style="flex:1">Concurrent requests <input type="range" id="mem-r" min="0" max="5" step="1" value="2" style="flex:1"> <b id="mem-v">5,000</b></label></div>
+    <div class="tiles" id="mem-tiles"></div>
+    <div class="out" id="mem-out"></div>
+    <p class="small muted" style="margin:6px 0 0">Rough, order-of-magnitude figures: ~1 MB of real memory per OS thread, ~2 KB starting stack per goroutine (it grows when needed).</p>
+  </div>
+</figure>
+<p>That's why the thread-per-request model struggles at high concurrency, and why most servers use a fixed <strong>pool</strong> of threads instead.</p>
+
+<h2 id="event-loop">The event loop</h2>
+<p>The other approach uses <strong>one thread</strong>. When a task needs IO, it doesn't block; it tells the loop "resume me when this result is ready" and hands the CPU back. The loop asks the OS which sockets are ready (via <code>epoll</code> on Linux, <code>kqueue</code> on macOS), runs the callbacks of finished operations, and repeats, forever.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>One waiter serves twenty tables. They take an order, hand it to the kitchen and move to the next table instead of standing at the kitchen window. When a dish is ready, they deliver it. But if they stop to carve a whole roast at one table, every other table waits.</p></aside>
+<figure class="anim" id="fig-loop">
+  <figcaption class="anim-title">One thread, many requests</figcaption>
+</figure>
+<p>For IO-bound work this is very efficient: one thread means no context switches and no per-thread stacks. More threads would only add switching. The trade-off is the golden rule: <strong>never block the event loop</strong>. A 100 ms CPU task freezes every request on the server. Typical SaaS code rarely has one, but image processing, video and ML do, and they belong in worker threads or separate services.</p>
+
+<h2 id="async-await">What <code>await</code> really does</h2>
+<p>Event loops resume work through <strong>callbacks</strong>: "run this function when the query returns". Chain a few IO calls and callbacks nest inside callbacks, the infamous callback hell. <code>async</code>/<code>await</code> is <strong>syntactic sugar</strong> over the same idea: everything after an <code>await</code>, to the end of the function, becomes the callback.</p>
+<div class="split">
+<pre><span class="c">// callbacks</span>
+<span class="k">function</span> getUser(req, res) {
+  db.query(<span class="s">"SELECT * FROM users WHERE id=$1"</span>, [req.params.id], (err, user) =&gt; {
+    db.query(<span class="s">"SELECT * FROM orders WHERE user_id=$1"</span>, [user.id], (err, orders) =&gt; {
+      res.json({ user, orders }); <span class="c">// …deeper with every call</span>
+    });
+  });
+}</pre>
+<pre><span class="c">// async/await: same behaviour, flat code</span>
+<span class="k">async function</span> getUser(req, res) {
+  <span class="k">const</span> user = <span class="k">await</span> db.query(<span class="s">"SELECT …"</span>, [req.params.id]);
+  <span class="c">// ↑ hand the CPU back; resume here when the rows arrive</span>
+  <span class="k">const</span> orders = <span class="k">await</span> db.query(<span class="s">"SELECT …"</span>, [user.id]);
+  res.json({ user, orders });
+}</pre>
+</div>
+<p>Under the hood, the runtime turns an <code>async</code> function into a <strong>state machine</strong> that advances one state per <code>await</code>:</p>
+<pre><span class="k">function</span> fetchUserData(userId) {            <span class="c">// roughly what "async" compiles to</span>
+  <span class="k">let</span> state = <span class="n">0</span>, user, orders;
+  <span class="k">return new</span> Promise((resolve) =&gt; {
+    <span class="k">function</span> step(result) {
+      <span class="k">switch</span> (state) {
+        <span class="k">case</span> <span class="n">0</span>: state = <span class="n">1</span>; db.getUser(userId).then(step); <span class="k">return</span>;        <span class="c">// await #1: loop is free</span>
+        <span class="k">case</span> <span class="n">1</span>: user = result; state = <span class="n">2</span>; db.getOrders(userId).then(step); <span class="k">return</span>; <span class="c">// await #2</span>
+        <span class="k">case</span> <span class="n">2</span>: orders = result; resolve({ user, orders });
+      }
+    }
+    step();
+  });
+}</pre>
+<p>Two puzzles solve themselves: <code>await</code> only works inside <code>async</code> functions because only those are converted into state machines, and blocking the loop is fatal because no state machine can advance to its next step until the loop is free.</p>
+
+<h2 id="goroutines">Goroutines: lightweight threads</h2>
+<p>Go takes a third path. A <strong>goroutine</strong> looks like a thread to your code, but it's managed by Go's own runtime scheduler, not the OS. The runtime starts about one OS thread per CPU core (<code>GOMAXPROCS</code>) and multiplexes thousands, even millions, of goroutines onto them. Switching goroutines is cheap, and each starts with a stack of a few KB, so Go's <code>net/http</code> simply starts a new goroutine for every incoming connection.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>A restaurant with four cooks (the OS threads, one per stove) and a rail of order tickets (goroutines). A cook whose dish is in the oven doesn't wait; they clip that ticket back on the rail and grab the next one.</p></aside>
+<figure class="anim" data-steps id="fig-gsched">
+  <figcaption class="anim-title">The Go scheduler: goroutines on OS threads</figcaption>
+  <div class="frame" data-note="Four cores, so four OS threads (M1–M4). Each has a queue of goroutines; each request got its own goroutine.">
+    <div class="gsched">
+      <div class="m"><b>M1 · OS thread</b><span class="g run">G1 · request A</span><span class="g">G2 · request B</span><span class="g">G5</span></div>
+      <div class="m"><b>M2 · OS thread</b><span class="g run">G3 · request C</span><span class="g">G6</span></div>
+      <div class="m"><b>M3 · OS thread</b><span class="g run">G4 · log flush</span><span class="g">G7</span></div>
+      <div class="m"><b>M4 · OS thread</b><span class="g run">G8</span><span class="g">G9</span></div>
+    </div>
+  </div>
+  <div class="frame" data-note="G1 calls db.Query and would block. Go's scheduler parks G1 and M1 immediately runs G2. The OS thread never sits idle, and no OS context switch happened.">
+    <div class="gsched">
+      <div class="m"><b>M1 · OS thread</b><span class="g park">G1 · waiting on DB</span><span class="g run">G2 · request B</span><span class="g">G5</span></div>
+      <div class="m"><b>M2 · OS thread</b><span class="g run">G3 · request C</span><span class="g">G6</span></div>
+      <div class="m"><b>M3 · OS thread</b><span class="g run">G4 · log flush</span><span class="g">G7</span></div>
+      <div class="m"><b>M4 · OS thread</b><span class="g run">G8</span><span class="g">G9</span></div>
+    </div>
+  </div>
+  <div class="frame" data-note="The query result arrives. G1 is runnable again and gets a turn on a thread to serialize and send its response.">
+    <div class="gsched">
+      <div class="m"><b>M1 · OS thread</b><span class="g done">G2 · done</span><span class="g run">G1 · request A: responding</span><span class="g">G5</span></div>
+      <div class="m"><b>M2 · OS thread</b><span class="g run">G3 · request C</span><span class="g">G6</span></div>
+      <div class="m"><b>M3 · OS thread</b><span class="g run">G7</span></div>
+      <div class="m"><b>M4 · OS thread</b><span class="g run">G9</span></div>
+    </div>
+  </div>
+</figure>
+<p>Your Go code reads like plain blocking code, with no <code>async</code> or <code>await</code>. The pause happens invisibly, as with threads, but at a fraction of the cost. Java's <strong>virtual threads</strong> (Java 21) follow the same idea.</p>
+<div class="tabs">
+  <div class="tab" data-label="Threads (Python)">
+<pre><span class="k">def</span> handle_request(user_id):
+    user = db.execute(<span class="s">"SELECT * FROM users WHERE id = %s"</span>, (user_id,))
+    <span class="c"># ↑ this OS thread blocks; the OS scheduler runs another thread</span>
+    <span class="k">return</span> to_json(user)</pre>
+  </div>
+  <div class="tab" data-label="Event loop (Node.js)">
+<pre><span class="k">async function</span> handleRequest(userId) {
+  <span class="k">const</span> user = <span class="k">await</span> db.query(<span class="s">"SELECT * FROM users WHERE id = $1"</span>, [userId]);
+  <span class="c">// ↑ the single thread moves on; this resumes as a callback</span>
+  <span class="k">return</span> user;
+}</pre>
+  </div>
+  <div class="tab" data-label="Goroutines (Go)">
+<pre><span class="k">func</span> handleRequest(w http.ResponseWriter, r *http.Request) {
+    row := db.QueryRow(<span class="s">"SELECT name FROM users WHERE id = $1"</span>, r.PathValue(<span class="s">"id"</span>))
+    <span class="c">// ↑ this goroutine parks; the Go scheduler runs another on the same OS thread</span>
+    ...
+}</pre>
+  </div>
+</div>
+
+<h2 id="race-conditions">Race conditions: the price of shared state</h2>
+<p>Almost every concurrency bug comes from one source: <strong>shared state</strong>. Even <code>counter++</code> is three steps: <strong>read</strong> the value into a CPU register, <strong>add</strong> one, <strong>write</strong> it back. If two threads interleave those steps, one update can vanish.</p>
+<figure class="anim" id="fig-race">
+  <figcaption class="anim-title">Try it: you are the scheduler</figcaption>
+  <div class="widget">
+    <div class="row">
+      <button type="button" class="ghost" id="race-bad">▶ Play the bad interleaving</button>
+      <label><input type="checkbox" id="race-lock"> Use a lock (mutex)</label>
+      <button type="button" class="ghost" id="race-reset">Reset</button>
+    </div>
+    <div class="race">
+      <div class="card" id="race-a"></div>
+      <div class="shared"><small class="muted">shared counter</small><div class="big" id="race-c">0</div><div id="race-lockst" class="small muted"></div></div>
+      <div class="card" id="race-b"></div>
+    </div>
+    <div class="out" id="race-log" style="margin-top:10px"></div>
+  </div>
+</figure>
+<p class="small muted">Click the threads' steps in any order. Run A completely, then B, and you get 2. Interleave the reads and you get 1: a <strong>lost update</strong>.</p>
+<p>A single-threaded event loop doesn't save you. Every <code>await</code> is a point where other code can run:</p>
+<pre><span class="k">let</span> balance = <span class="n">100</span>;
+<span class="k">async function</span> withdraw(amount) {
+  <span class="k">if</span> (balance &gt;= amount) {            <span class="c">// ① check</span>
+    <span class="k">await</span> processWithdrawal(amount);   <span class="c">// ② yield: other code runs here</span>
+    balance -= amount;                 <span class="c">// ③ act on a stale check</span>
+  }
+}
+withdraw(<span class="n">100</span>); withdraw(<span class="n">100</span>);</pre>
+<figure class="anim" id="fig-withdraw">
+  <figcaption class="anim-title">Two withdrawals, one thread, balance −100</figcaption>
+</figure>
+<div class="cards">
+  <div class="card"><h4>Locks (mutexes)</h4><p>Only one thread at a time may enter the critical section; the others wait for the lock. Simple, but hold locks briefly and in a consistent order to avoid slowdowns and deadlocks.</p></div>
+  <div class="card"><h4>Channels</h4><p>Go's alternative: instead of many goroutines touching one variable, they send messages to the single goroutine that owns it. "Don't communicate by sharing memory; share memory by communicating."</p></div>
+  <div class="card"><h4>Let the database decide</h4><p>In a backend, shared state usually lives in the database. Make check-and-update one atomic step: <code>UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance &gt;= $1</code>, or a transaction with <code>SELECT … FOR UPDATE</code> (lesson 12).</p></div>
+</div>
+
+<h2 id="summary">Choosing the right tool</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Workload</th><th>Best fit</th><th>Examples</th></tr></thead>
+  <tbody>
+    <tr><td>IO-bound, high concurrency</td><td>Event loop or lightweight threads</td><td>Web servers, API gateways, services calling other services: <code>async</code>/<code>await</code>, goroutines, Java virtual threads</td></tr>
+    <tr><td>CPU-bound</td><td>Parallelism on OS threads (one per core)</td><td>Image and video processing, encryption, ML, crunching data</td></tr>
+  </tbody>
+</table></div>
+<p>Concurrency keeps your program productive while it waits; parallelism lets it compute on many cores at once. Most backend work leans on concurrency, but knowing which kind of work you have is what lets you pick the right tool.</p>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>A typical request spends ~95% of its time waiting on IO; concurrency fills that idle CPU time with other work.</li>
+  <li>Concurrency is dealing with many things (works on one core); parallelism is doing many things at once (needs many cores).</li>
+  <li>IO-bound work needs concurrency; CPU-bound work needs parallelism. Most backends are IO-bound.</li>
+  <li>OS threads give true parallelism but cost memory, creation time and context switches.</li>
+  <li>An event loop handles thousands of connections on one thread, as long as nothing blocks it. <code>await</code> means "resume me later" and compiles to a state machine.</li>
+  <li>Goroutines and virtual threads look like threads but are scheduled by the runtime, cheap enough for one per request.</li>
+  <li>Shared state causes race conditions, even in single-threaded async code. Use locks, channels or atomic database operations.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Your Node.js API's latency spikes for everyone whenever one user uploads a large image to be resized. Why?</summary><div><p>Resizing is CPU-bound and runs on the event loop's only thread, so it blocks every other request until it finishes. Move it to a worker thread, a queue worker or a separate service.</p></div></details>
+  <details><summary>Would moving an IO-bound API from 2 cores to 16 cores make it much faster?</summary><div><p>Probably not. It's mostly waiting on the database and other services; more cores don't shorten waits. Concurrency, fewer round trips and faster queries help more.</p></div></details>
+  <details><summary>Is a single-core server capable of concurrency? Of parallelism?</summary><div><p>Concurrency, yes: it can interleave many tasks, switching whenever one waits. Parallelism, no: that needs instructions executing at the same instant on multiple cores.</p></div></details>
+  <details><summary>Why can Go afford a goroutine per connection when a thread per connection would exhaust memory?</summary><div><p>Goroutines start with tiny stacks (a few KB) and are switched by the Go runtime, not the OS, so creating and switching them is cheap. OS threads reserve far more memory and switch through the kernel.</p></div></details>
+  <details><summary>Two requests each run <code>stock = await getStock(); if (stock &gt; 0) await setStock(stock - 1);</code> for the last item. What can go wrong, and how do you fix it?</summary><div><p>Both read stock = 1 before either writes, so both sell the last item. Make it atomic in the database: <code>UPDATE products SET stock = stock - 1 WHERE id = $1 AND stock &gt; 0</code>, and check whether a row was updated.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.timeline("#fig-wait", {
+  lanes: ["CPU working", "Waiting on IO"],
+  total: 270, unit: " ms", ticks: 6, labelW: 120,
+  legend: [{ k: "cpu", label: "CPU: parse, validate, serialize" }, { k: "io", label: "waiting: DB, Redis, email API" }],
+  segs: [
+    { lane: 0, s: 0, d: 3, k: "cpu" },
+    { lane: 1, s: 3, d: 50, k: "io", t: "DB query" },
+    { lane: 0, s: 53, d: 1, k: "cpu" },
+    { lane: 1, s: 54, d: 50, k: "io", t: "DB query" },
+    { lane: 1, s: 104, d: 50, k: "io", t: "Redis" },
+    { lane: 0, s: 154, d: 1, k: "cpu" },
+    { lane: 1, s: 155, d: 50, k: "io", t: "email API" },
+    { lane: 1, s: 205, d: 50, k: "io", t: "DB insert" },
+    { lane: 0, s: 255, d: 5, k: "cpu" }
+  ],
+  steps: [
+    { to: 104, note: "Parse and validate (3 ms of CPU), then a database query… and the CPU sits idle for 50 ms. Another query, another wait." },
+    { to: 262, note: "Five IO calls at ~50 ms each: <b>250 ms of waiting</b> against about <b>10 ms of CPU work</b>. The hardware is idle ~95% of the time." }
+  ]
+});
+
+BD.timeline("#fig-cvp", {
+  lanes: ["1 core · A", "1 core · B", "2 cores · A", "2 cores · B"],
+  total: 60, unit: " ms", ticks: 6, labelW: 110,
+  legend: [{ k: "cpu", label: "using the CPU" }, { k: "io", label: "waiting on IO" }, { k: "wait", label: "waiting for a free core" }],
+  segs: [
+    { lane: 0, s: 0, d: 5, k: "cpu" },
+    { lane: 0, s: 5, d: 35, k: "io", t: "DB query" },
+    { lane: 0, s: 40, d: 5, k: "cpu" },
+    { lane: 1, s: 0, d: 5, k: "wait" },
+    { lane: 1, s: 5, d: 10, k: "cpu", t: "CPU" },
+    { lane: 1, s: 15, d: 35, k: "io", t: "DB query" },
+    { lane: 1, s: 50, d: 5, k: "cpu" },
+    { lane: 2, s: 0, d: 5, k: "cpu" },
+    { lane: 2, s: 5, d: 35, k: "io", t: "DB query" },
+    { lane: 2, s: 40, d: 5, k: "cpu" },
+    { lane: 3, s: 0, d: 10, k: "cpu", t: "CPU" },
+    { lane: 3, s: 10, d: 35, k: "io", t: "DB query" },
+    { lane: 3, s: 45, d: 5, k: "cpu" }
+  ],
+  steps: [
+    { to: 5, note: "<b>One core:</b> A gets the CPU first; B has to wait. <b>Two cores:</b> both start immediately." },
+    { to: 15, note: "One core: the moment A starts waiting on the database, the scheduler gives the CPU to B. Nothing is wasted. That's <b>concurrency</b>." },
+    { to: 60, note: "Both requests are \"in progress\" the whole time on one core, but only one runs at any instant. With two cores they truly run at the same moment: <b>parallelism</b>. Since most of the time is waiting, the single core finishes only 5 ms later." }
+  ]
+});
+
+(function () {
+  var counts = [100, 1000, 5000, 10000, 50000, 100000];
+  var r = document.getElementById("mem-r"), tiles = document.getElementById("mem-tiles"), out = document.getElementById("mem-out");
+  function size(kb) { return kb >= 1048576 ? (kb / 1048576).toFixed(kb >= 10485760 ? 0 : 1) + " GB" : kb >= 1024 ? Math.round(kb / 1024) + " MB" : Math.round(kb) + " KB"; }
+  function render() {
+    var n = counts[+r.value];
+    document.getElementById("mem-v").textContent = n.toLocaleString("en-US");
+    var th = n * 1024, go = n * 2;
+    tiles.innerHTML = '<div class="tile ' + (th > 16 * 1048576 ? "bad" : th > 4 * 1048576 ? "warn" : "") + '"><small>OS thread per request</small><b>' + size(th) + '</b></div><div class="tile ok"><small>Goroutine per request</small><b>' + size(go) + '</b></div><div class="tile ok"><small>Event loop</small><b style="font-size:16px;line-height:1.7">1 thread + small callbacks</b></div>';
+    out.innerHTML = th > 16 * 1048576 ? '<span class="verdict bad">✕ The threads alone exceed a 16 GB server</span>' : th > 4 * 1048576 ? '<span class="verdict bad">Threads now eat a big share of RAM, and the OS juggles ' + n.toLocaleString("en-US") + " of them</span>" : '<span class="verdict ok">✓ Fine at this scale for any model</span>';
+  }
+  r.addEventListener("input", render); render();
+})();
+
+BD.flow("#fig-loop", {
+  w: 720, h: 300,
+  nodes: {
+    a: { x: 80, y: 70, label: "Request A", sub: "", kind: "client", w: 120 },
+    b: { x: 80, y: 230, label: "Request B", sub: "", kind: "client", w: 120 },
+    loop: { x: 330, y: 150, label: "Event loop", sub: "1 thread", kind: "server", shape: "circle", w: 140, h: 140 },
+    os: { x: 590, y: 70, label: "OS: epoll / kqueue", sub: "watching sockets", kind: "net", w: 170 },
+    db: { x: 590, y: 230, label: "Database", sub: "", kind: "db", shape: "cyl", w: 140, h: 64 }
+  },
+  edges: [["a", "loop"], ["b", "loop"], ["loop", "db"], ["db", "os"], ["os", "loop"]],
+  steps: [
+    { path: ["a", "loop"], hl: ["loop"], set: { loop: "running A" }, note: "Request A arrives. The loop's only thread parses and validates it." },
+    { path: ["loop", "db"], packet: "A: SELECT", set: { loop: "free", os: "waiting: A" }, note: "A hits <code>await db.query()</code>: the query is sent, a callback is registered, and the thread is free again. Nothing blocks." },
+    { path: ["b", "loop"], hl: ["loop"], set: { loop: "running B", os: "waiting: A" }, note: "Meanwhile request B arrives and gets the thread." },
+    { path: ["loop", "db"], packet: "B: SELECT", set: { loop: "free", os: "waiting: A, B" }, note: "B awaits its own query. Two requests are in progress; the thread is idle." },
+    { path: ["db", "os", "loop"], packet: "B ready", set: { loop: "B's callback", os: "waiting: A" }, note: "On its next turn the loop asks the OS which sockets are readable. B's answer came back first, so B's callback runs…" },
+    { path: ["loop", "b"], tone: "ok", ok: ["b"], packet: "200", set: { loop: "free", os: "waiting: A" }, note: "…and B gets its response. Order of completion, not arrival, decides who finishes first." },
+    { path: [["db", "os", "loop"], ["loop", "a"]], tone: "ok", ok: ["a", "b"], set: { loop: "A's callback", os: "idle" }, note: "A's rows arrive and its callback sends the response. One thread served both requests with no context switches." },
+    { path: ["a", "loop"], fresh: true, bad: ["loop"], warn: ["b"], set: { loop: "resizing image…", b: "waiting…" }, note: "Now A asks for a <b>synchronous</b> 300 ms image resize. The only thread is busy computing, so B and every other request wait. <b>Never block the event loop.</b>" }
+  ]
+});
+
+(function () {
+  var counter, th, lock, log;
+  var OPS = ["read counter → register", "add 1 to register", "write register → counter"];
+  var $ = function (id) { return document.getElementById(id); };
+  var useLock = $("race-lock");
+  function reset() { counter = 0; lock = null; log = []; th = { A: { step: 0, reg: null }, B: { step: 0, reg: null } }; render(); }
+  function act(n) {
+    var t = th[n];
+    if (t.step >= 3) return;
+    if (useLock.checked && t.step === 0) { if (lock && lock !== n) return; lock = n; }
+    if (t.step === 0) t.reg = counter;
+    else if (t.step === 1) t.reg += 1;
+    else { counter = t.reg; if (lock === n) lock = null; }
+    log.push('<span class="chip ' + (n === "A" ? "acc" : "warn") + '">' + n + ": " + OPS[t.step].split(" ")[0] + (t.step === 0 ? " " + t.reg : t.step === 1 ? " → " + t.reg : " " + counter) + "</span>");
+    t.step++;
+    render();
+  }
+  function card(n) {
+    var t = th[n], waiting = useLock.checked && t.step === 0 && lock && lock !== n;
+    var btn = t.step < 3 ? '<button type="button" class="act" data-t="' + n + '"' + (waiting ? " disabled" : "") + ">" + (waiting ? "waiting for lock…" : OPS[t.step]) + "</button>" : '<span class="chip ok">done</span>';
+    return "<h4>Thread " + n + '</h4><p class="small muted" style="margin:0 0 8px">register: <b>' + (t.reg == null ? "–" : t.reg) + "</b> · step " + Math.min(t.step + 1, 3) + " of 3</p>" + btn;
+  }
+  function render() {
+    $("race-a").innerHTML = card("A"); $("race-b").innerHTML = card("B");
+    $("race-c").textContent = counter;
+    $("race-lockst").textContent = useLock.checked ? (lock ? "lock held by " + lock : "lock free") : "";
+    var done = th.A.step === 3 && th.B.step === 3;
+    $("race-log").innerHTML = (log.length ? log.join(" ") : "Each thread wants to do <code>counter++</code>.") +
+      (done ? (counter === 2 ? ' <span class="verdict ok">✓ counter = 2: both increments kept</span>' : ' <span class="verdict bad">✕ counter = 1: one increment was lost</span>') : "");
+    Array.prototype.forEach.call(document.querySelectorAll("#fig-race button[data-t]"), function (b) { b.addEventListener("click", function () { act(b.getAttribute("data-t")); }); });
+  }
+  var timer = null;
+  $("race-bad").addEventListener("click", function () {
+    clearInterval(timer); reset();
+    var seq = ["A", "B", "A", "B", "A", "B"], i = 0;
+    timer = setInterval(function () { if (i >= seq.length) { clearInterval(timer); return; } var before = log.length; act(seq[i]); if (log.length === before) { act(seq[i] === "A" ? "B" : "A"); } i++; }, 700);
+  });
+  useLock.addEventListener("change", function () { clearInterval(timer); reset(); });
+  $("race-reset").addEventListener("click", function () { clearInterval(timer); reset(); });
+  reset();
+})();
+
+BD.seq("#fig-withdraw", {
+  actors: ["withdraw(100) #1", "balance", "withdraw(100) #2"],
+  colW: 190, rowH: 40, pad: 80,
+  steps: [
+    { from: 0, to: 1, label: "check: 100 ≥ 100 ✓", note: "Call #1 checks the balance: enough money." },
+    { from: 0, to: 0, label: "await processWithdrawal()", note: "It awaits the payment call and hands control back to the event loop." },
+    { from: 2, to: 1, label: "check: 100 ≥ 100 ✓", note: "Call #2 runs in that gap. The balance is <em>still</em> 100, so its check passes too." },
+    { from: 2, to: 2, label: "await processWithdrawal()", note: "Call #2 also awaits. Both withdrawals are now approved." },
+    { from: 0, to: 1, label: "balance −= 100 → 0", ret: true, note: "Call #1 resumes and deducts: balance 0." },
+    { from: 2, to: 1, label: "balance −= 100 → −100 ✕", ret: true, tone: "bad", note: "Call #2 resumes and acts on its stale check: <b>−100</b>. One thread, no parallelism, and still a race condition." }
+  ]
+});
+</script>
+</body>
+</html>
