@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Full-text search · Backend Dev</title>
+<meta name="description" content="Why LIKE queries fall over, and how inverted indexes and relevance scoring fix it.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="15">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 15</span><span>Video · 32:08</span></div>
+  <h1>Full text search with Elasticsearch</h1>
+  <p class="lead"><code>WHERE name ILIKE '%laptop%'</code> works fine for 5,000 products and falls apart at millions. It's slow, it has no sense of <strong>relevance</strong>, and one typo breaks it. Search engines like Elasticsearch fix all three with an old idea: the <strong>inverted index</strong>.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Why LIKE-based search doesn't scale</li><li>How an inverted index flips the problem</li><li>How relevance is scored (BM25, field boosting)</li><li>Typo tolerance, type-ahead and log search</li><li>When to choose Elasticsearch vs Postgres full-text search</li></ul></div>
+</div>
+<h2 id="story">A search that stopped working</h2>
+<p>It's 2005. Your e-commerce company has 5,000 products and you write:</p>
+<pre><span class="k">SELECT</span> * <span class="k">FROM</span> products
+<span class="k">WHERE</span> name <span class="k">ILIKE</span> <span class="s">'%laptop%'</span> <span class="k">OR</span> description <span class="k">ILIKE</span> <span class="s">'%laptop%'</span>;</pre>
+<p>About 50 ms, and everyone's happy. Then the company explodes to millions of products, and the same query takes <strong>30 seconds</strong>. Your manager also wants it to be:</p>
+<div class="cards">
+  <div class="card"><h4>Fast</h4><p>Milliseconds, not seconds. Every second of delay costs conversions.</p></div>
+  <div class="card"><h4>Relevant</h4><p>"laptop" should show a MacBook Pro before a laptop <em>bag</em>.</p></div>
+  <div class="card"><h4>Typo-tolerant</h4><p>Rushed shoppers type "laptpo". They should still find laptops.</p></div>
+</div>
+
+<h2 id="librarian">The librarian problem</h2>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>Your database is a librarian who knows where every book <em>is</em>, but to find "books about machine learning" they must open every book on every shelf: Harry Potter, no; Game of Thrones, no; <em>Introduction to Machine Learning</em>, yes… With a billion books, that takes days. And they hand you results in random order: a book that mentions machine learning once on its last page might come before the one with it in the title.</p></aside>
+<p>That is exactly what <code>ILIKE '%…%'</code> does: scan every row, pattern-match every text field character by character, then return the matches unranked. Thorough, but slow and dumb about relevance. Google, Amazon and LinkedIn, indexing billions of pages, products and profiles, couldn't live with that.</p>
+
+<h2 id="inverted">The big idea: flip it</h2>
+<p>Decades of information-retrieval research (since the 1960s) produced the key insight: <strong>don't search the documents for the words; look the words up to find the documents.</strong> When a document arrives, break it into terms and record, for each term, which documents contain it (and where). That's an <strong>inverted index</strong>, like the index at the back of a textbook, built for the whole library.</p>
+<figure class="anim" data-steps id="fig-build">
+  <figcaption class="anim-title">Building and using an inverted index</figcaption>
+  <div class="frame" data-note="Start with documents. In Elasticsearch, each one is a JSON <b>document</b>, a bit like in MongoDB.">
+<pre>doc 1: "Introduction to Machine Learning"
+doc 2: "The Machine Age"
+doc 3: "Coffee Machine Manual"
+doc 4: "Learning to Cook"
+doc 5: "Deep Learning Fundamentals"</pre></div>
+  <div class="frame" data-note="At index time, each text is <b>analysed</b>: lowercased and split into terms.">
+<pre>"Introduction to Machine Learning"
+   → [introduction] [to] [machine] [learning]</pre></div>
+  <div class="frame" data-note="Each term points to the documents (and positions) where it appears. That's the inverted index.">
+<pre>machine   → doc 1 (pages 1, 15, 23) · doc 2 (pages 5, 89) · doc 3 (page 1)
+learning  → doc 1 (pages 1, 16, 24) · doc 4 (pages 2, 7)  · doc 5 (pages 1, 9, 30)
+cook      → doc 4
+deep      → doc 5
+…</pre></div>
+  <div class="frame" data-note="A query is now two lookups, not a scan of every document. And the index knows <b>how often</b> and <b>where</b> each term appears, which is what makes ranking possible.">
+<pre>query "machine learning"
+  machine  → 1, 2, 3
+  learning → 1, 4, 5
+  ranked:  doc 1 (both terms, in the title, frequent)
+           doc 2 · doc 5 · doc 3 · doc 4</pre></div>
+</figure>
+<p>This idea is implemented by <strong>Apache Lucene</strong>, the engine inside Elasticsearch (and many other search tools). Postgres also ships its own full-text search.</p>
+
+<h2 id="relevance">Relevance scoring</h2>
+<p>Elasticsearch ranks results with the <strong>BM25</strong> algorithm. You don't need the maths, just the intuition:</p>
+<div class="cards">
+  <div class="card"><h4>Term frequency</h4><p>A term appearing many times in a document is a sign the document is about it.</p></div>
+  <div class="card"><h4>Document frequency</h4><p>Rare terms matter more. "laptop" across all products tells you less than "thunderbolt".</p></div>
+  <div class="card"><h4>Document length</h4><p>One mention in a short title outweighs one mention in a 500-page book.</p></div>
+  <div class="card"><h4>Field boosting</h4><p>You decide: a match in the <strong>title</strong> beats one in the description, which beats one in the body.</p></div>
+</div>
+
+<h2 id="try">Try it: LIKE vs an inverted index</h2>
+<p>Six products, indexed on title (boosted ×3) and description. Try <code>laptop</code>, <code>gaming laptop</code>, or the typo <code>laptpo</code>.</p>
+<figure class="anim" id="fig-search">
+  <figcaption class="anim-title">Same query, two engines</figcaption>
+  <div class="widget">
+    <div class="row">
+      <input type="text" id="se-q" value="laptop" aria-label="Search query" style="flex:1;min-width:160px">
+      <label><input type="checkbox" id="se-fuzzy" checked> typo tolerance</label>
+    </div>
+    <div class="split">
+      <div><h5>Database: <code>ILIKE '%…%'</code></h5><div id="se-like"></div></div>
+      <div><h5>Search engine: inverted index + BM25</h5><div id="se-es"></div></div>
+    </div>
+    <p class="out" id="se-terms" style="margin:10px 0 0"></p>
+  </div>
+</figure>
+
+<h2 id="uses">What it's used for</h2>
+<div class="cards">
+  <div class="card"><h4>Type-ahead &amp; typos</h4><p>Search-as-you-type boxes like Amazon's or Google's. Type "what is treading today" and it still understands "trending".</p></div>
+  <div class="card"><h4>Product, profile &amp; content search</h4><p>Full-text search over users, posts and comments, ranked by relevance, with filters and aggregations.</p></div>
+  <div class="card"><h4>Logs (ELK stack)</h4><p><strong>E</strong>lasticsearch + <strong>L</strong>ogstash + <strong>K</strong>ibana: fast search and dashboards over huge volumes of logs (lesson 18).</p></div>
+</div>
+
+<h2 id="demo">The video's benchmark</h2>
+<p>50,000 product reviews were loaded into both a Neon Postgres table and an Elastic Cloud index, in the same region. The mapping made <code>review</code> a <strong>text</strong> field (analysed into terms) and <code>sentiment</code> a <strong>keyword</strong> (exact match only). Both engines returned the same ~8,000 matches:</p>
+<figure class="anim" id="fig-bench">
+  <figcaption class="anim-title">Same query, same result count, very different times</figcaption>
+</figure>
+
+<h2 id="choose">Which should you use?</h2>
+<div class="split">
+  <div class="card"><h4>Postgres full-text search</h4><p>Already on Postgres and your search needs are modest? Start here: no extra system to run and keep in sync.</p></div>
+  <div class="card"><h4>Elasticsearch</h4><p>Need heavy relevance tuning, typo tolerance and type-ahead at scale, or already run the ELK stack for logs? Use it.</p></div>
+</div>
+<aside class="callout ok"><div class="tag">Perspective</div><p>Master your <strong>database</strong>: it touches almost all of your code. Elasticsearch you can mostly use well from the docs and standard examples, then dig deeper only when you need to optimise.</p></aside>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li><code>ILIKE '%term%'</code> scans every row and returns unranked results, which breaks down at scale.</li>
+  <li>An inverted index maps each term to the documents containing it: look up words instead of scanning documents.</li>
+  <li>Relevance (BM25) uses term frequency, rarity across documents, document length and field boosts.</li>
+  <li>Search engines add typo tolerance, type-ahead, filters and aggregations; Elasticsearch is built on Apache Lucene.</li>
+  <li>Use Postgres full-text search for simple needs; use Elasticsearch for serious search or if you already run ELK.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Why can't a normal B-tree index speed up <code>ILIKE '%laptop%'</code>?</summary><div><p>A B-tree helps with prefix or equality lookups. A leading wildcard means the match could start anywhere in the text, so the database still has to examine every value.</p></div></details>
+  <details><summary>In Elasticsearch, should an order status like <code>shipped</code> be mapped as text or keyword?</summary><div><p>Keyword: you filter on the exact value; you don't want it analysed into terms or scored.</p></div></details>
+  <details><summary>A laptop <em>bag</em> outranks a laptop for "laptop". What would you tune?</summary><div><p>Field boosting (weight the title or category more heavily), and possibly use structured filters such as category = laptops alongside the text query.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+(function () {
+  var docs = [
+    { id: 1, title: "MacBook Pro 14 laptop", desc: "Apple laptop with M3 chip, a great laptop for developers" },
+    { id: 2, title: "Padded laptop bag sleeve", desc: "Protective sleeve that fits 15 inch devices" },
+    { id: 3, title: "Dell XPS 13 laptop", desc: "Thin and light laptop for work and travel" },
+    { id: 4, title: "Coffee machine", desc: "Espresso machine for home baristas" },
+    { id: 5, title: "Gaming mouse", desc: "Precise wireless mouse for gamers" },
+    { id: 6, title: "ASUS ROG gaming laptop", desc: "Gaming laptop with RTX graphics" }
+  ];
+  var tok = function (s) { return s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean); };
+  var index = {}, lens = { title: 0, desc: 0 };
+  docs.forEach(function (d) {
+    ["title", "desc"].forEach(function (f) {
+      var t = tok(d[f]); d[f + "Len"] = t.length; lens[f] += t.length;
+      t.forEach(function (w) { index[w] = index[w] || {}; index[w][d.id] = index[w][d.id] || { title: 0, desc: 0 }; index[w][d.id][f]++; });
+    });
+  });
+  var avg = { title: lens.title / docs.length, desc: lens.desc / docs.length }, N = docs.length;
+  function lev(a, b) {
+    var m = [], i, j;
+    for (i = 0; i <= a.length; i++) { m[i] = [i]; }
+    for (j = 0; j <= b.length; j++) { m[0][j] = j; }
+    for (i = 1; i <= a.length; i++) for (j = 1; j <= b.length; j++) {
+      m[i][j] = Math.min(m[i - 1][j] + 1, m[i][j - 1] + 1, m[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) m[i][j] = Math.min(m[i][j], m[i - 2][j - 2] + 1);
+    }
+    return m[a.length][b.length];
+  }
+  var $ = function (id) { return document.getElementById(id); };
+  function bar(score, max, color) { return '<div class="meter" style="height:8px;margin-top:4px"><i style="width:' + (max ? (score / max * 100) : 0) + '%;background:' + color + '"></i></div>'; }
+  function run() {
+    var q = $("se-q").value.trim(), fuzzy = $("se-fuzzy").checked;
+    // LIKE
+    var ql = q.toLowerCase(), like = docs.filter(function (d) { return ql && (d.title.toLowerCase().indexOf(ql) >= 0 || d.desc.toLowerCase().indexOf(ql) >= 0); });
+    $("se-like").innerHTML = '<p class="small muted" style="margin:0 0 6px">Scanned all ' + N + " rows character by character · " + like.length + " match" + (like.length === 1 ? "" : "es") + ", in table order:</p>" +
+      (like.length ? like.map(function (d) { return '<div class="card" style="padding:8px 12px;margin:6px 0"><b>' + d.title + "</b></div>"; }).join("") : '<div class="card" style="padding:8px 12px">No rows matched.</div>');
+    // inverted index + BM25
+    var terms = tok(q), used = [], scores = {};
+    terms.forEach(function (t) {
+      var hits = [];
+      if (index[t]) hits.push(t);
+      else if (fuzzy && t.length > 3) Object.keys(index).forEach(function (w) { if (Math.abs(w.length - t.length) <= 1 && lev(t, w) <= 1) hits.push(w); });
+      hits.forEach(function (w) {
+        used.push(t === w ? "<code>" + w + "</code> → docs " + Object.keys(index[w]).join(", ") : "<code>" + t + "</code> ≈ <code>" + w + "</code> (typo) → docs " + Object.keys(index[w]).join(", "));
+        var df = Object.keys(index[w]).length, idf = Math.log(1 + (N - df + 0.5) / (df + 0.5));
+        Object.keys(index[w]).forEach(function (id) {
+          var d = docs[id - 1], s = 0;
+          [["title", 3], ["desc", 1]].forEach(function (fb) {
+            var tf = index[w][id][fb[0]]; if (!tf) return;
+            var k1 = 1.2, b = 0.75, len = d[fb[0] + "Len"];
+            s += fb[1] * idf * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * len / avg[fb[0]]));
+          });
+          scores[id] = (scores[id] || 0) + s;
+        });
+      });
+    });
+    var ranked = Object.keys(scores).map(function (id) { return { d: docs[id - 1], s: scores[id] }; }).sort(function (a, b) { return b.s - a.s; });
+    var max = ranked.length ? ranked[0].s : 0;
+    $("se-es").innerHTML = '<p class="small muted" style="margin:0 0 6px">Looked up ' + terms.length + " term" + (terms.length === 1 ? "" : "s") + " in the index · ranked by relevance:</p>" +
+      (ranked.length ? ranked.map(function (r, i) { return '<div class="card" style="padding:8px 12px;margin:6px 0"><b>' + (i + 1) + ". " + r.d.title + '</b> <span class="small muted">score ' + r.s.toFixed(2) + "</span>" + bar(r.s, max, "var(--ok)") + "</div>"; }).join("") : '<div class="card" style="padding:8px 12px">No documents.</div>');
+    $("se-terms").innerHTML = used.length ? "Index lookups: " + used.join(" · ") : (q ? "No matching terms in the index" + (fuzzy ? "." : ". Try enabling typo tolerance.") : "");
+  }
+  $("se-q").addEventListener("input", run); $("se-fuzzy").addEventListener("change", run); run();
+})();
+
+BD.timeline("#fig-bench", {
+  lanes: ["Postgres ILIKE", "Elasticsearch"],
+  total: 8, unit: "s", ticks: 4, labelW: 120,
+  legend: [{ k: "db", label: "scanning every row" }, { k: "cache", label: "index lookup + scoring" }, { k: "ok", label: "results" }],
+  segs: [
+    { lane: 0, s: 0, d: 7.3, k: "db", t: "pattern-matching 50,000 reviews…" }, { lane: 0, s: 7.3, d: 0.25, k: "ok" },
+    { lane: 1, s: 0, d: 0.35, k: "cache" }, { lane: 1, s: 0.35, d: 0.15, k: "ok" }
+  ],
+  steps: [
+    { to: 0.6, note: "<b>Elasticsearch</b> answers in about half a second: terms are looked up in the inverted index." },
+    { to: 4, note: "<b>Postgres with ILIKE</b> is still scanning, examining every review's text." },
+    { to: 7.6, note: "About 7.5 s later it returns the <i>same</i> ~8,000 results, unranked. On millions of rows the gap only widens." }
+  ]
+});
+</script>
+</body>
+</html>
