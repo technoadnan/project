@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backend security · Backend Dev</title>
+<meta name="description" content="Injection, broken auth, XSS, CSRF, misconfiguration and how to defend each.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="20">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 20</span><span>Video · 2:50:03</span></div>
+  <h1>Backend security: everything you need to know</h1>
+  <p class="lead">No application is ever "fully secure". The goal is a <strong>mindset</strong>: a healthy paranoia that makes you ask, every time you write code, <em>"what could go wrong here?"</em> Attackers don't care about your framework. They hunt for one thing: <strong>the place where you made an assumption</strong>.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>How to think like an attacker</li><li>Injection (SQL, NoSQL, command): why data turns into code</li><li>Password storage from plain text to Argon2id, plus sessions, cookies, JWTs and rate limiting</li><li>Broken authorization: BOLA/IDOR, BFLA, horizontal vs vertical</li><li>XSS, CSP, CSRF and misconfiguration</li><li>Defence in depth, and where to keep learning</li></ul></div>
+</div>
+<h2 id="mindset">Think like an attacker</h2>
+<p>Security spans browsers, networks, server operating systems and your backend code. This lesson stays with the backend. Nearly every vulnerability below comes from a developer assuming something under deadline pressure, while thinking about the happy path:</p>
+<div class="cards">
+  <div class="card"><h4>"Input will be clean."</h4><p>It won't. Every field is an attack surface.</p></div>
+  <div class="card"><h4>"The user is who they say."</h4><p>Unless you verify it on every request, they aren't.</p></div>
+  <div class="card"><h4>"Requests come from our frontend."</h4><p>Anyone can call your API with curl or a script.</p></div>
+  <div class="card"><h4>"Nobody opens DevTools."</h4><p>Attackers live in the network tab, editing parameters.</p></div>
+</div>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>A house is only as secure as its least-considered entrance. Lock the front door (frontend validation) but leave the kitchen window open (an unchecked API parameter), and the burglar uses the window.</p></aside>
+
+<h2 id="injection">Injection: when data becomes code</h2>
+<p>Your backend speaks several languages: <strong>SQL</strong> to the database, <strong>HTML/JS</strong> to browsers, <strong>shell</strong> to the operating system. Each has special characters that separate commands from data. Trouble starts when user input crosses into one of these languages and its special characters get interpreted.</p>
+<figure class="anim" id="fig-langs">
+  <figcaption class="anim-title">One backend, many languages, many boundaries</figcaption>
+</figure>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>Imagine a mail-merge letter: "Dear {name}, your order shipped." Someone sets their name to <em>"Bob. P.S. Please refund every customer"</em>. The template can't tell where the name ends and your instructions begin. A parameterized query is a form with a <strong>boxed field</strong>: whatever is written in the box is only ever the name.</p></aside>
+
+<h3>SQL injection, character by character</h3>
+<figure class="anim" id="fig-sqli">
+  <figcaption class="anim-title">How <code>' OR '1'='1' --</code> rewrites a login query</figcaption>
+  <div class="msg-pad">
+<pre><span data-part="1">SELECT * FROM users WHERE email = '</span><span data-part="2">'</span><span data-part="3"> OR '1'='1'</span><span data-part="4"> --</span><span data-part="5">'</span></pre>
+  </div>
+</figure>
+<ul>
+  <li>Swap the payload for <code>'; DROP TABLE users; --</code> and a second, destructive statement rides along. Attackers also use <code>UNION</code> to read other tables, database functions to read files, and sometimes even run OS commands.</li>
+  <li><strong>Fix 1: parameterized queries</strong> (lesson 12). The input goes in a slot and is treated purely as data. Every modern driver and ORM supports them; you're only vulnerable if you deliberately build SQL strings yourself.</li>
+  <li><strong>Fix 2: least privilege.</strong> The app's database user should only run data operations (SELECT, INSERT, UPDATE, DELETE), never DDL like <code>DROP</code> or <code>ALTER</code>. Many drivers also refuse stacked statements by default.</li>
+</ul>
+<h3>NoSQL injection</h3>
+<p>MongoDB queries are objects, and objects can contain operators. Pass a request body straight into a query and the attacker controls the <em>structure</em>, not just the value:</p>
+<pre><span class="c">// POST /login  body: { "email": { "$ne": null }, "password": { "$ne": null } }</span>
+db.users.findOne({ email: req.body.email, password: req.body.password }); <span class="c">// ✕ matches the first user</span></pre>
+<h3>Command injection</h3>
+<p>Resizing an upload with ffmpeg and letting the user choose the output filename? A name like <code>out.jpg; rm -rf /</code> ends your command and starts theirs (pipes and <code>&amp;</code> open more doors). Pass arguments as an <strong>array</strong> so they never go through a shell:</p>
+<pre><span class="c">// ✕ shell string: the shell interprets ; | &amp; $( )</span>
+exec(<span class="s">`ffmpeg -i in.png -vf scale=120:220 ${outputName}`</span>);
+<span class="c">// ✓ argument array: outputName is passed to the process as plain data</span>
+execFile(<span class="s">"ffmpeg"</span>, [<span class="s">"-i"</span>, <span class="s">"in.png"</span>, <span class="s">"-vf"</span>, <span class="s">"scale=120:220"</span>, outputName]);</pre>
+<aside class="callout ok"><div class="tag">The rule for every injection</div><p>Whenever you build a string that <strong>another system will interpret</strong> (SQL, a shell, HTML, LDAP, XML…) and it contains user input, stop. Use the API that separates structure from data: query parameters, argument arrays, templating that escapes. Never string concatenation.</p></aside>
+
+<h2 id="authn">Authentication</h2>
+<p><strong>Advice first:</strong> in production, strongly consider an auth provider (Clerk, Auth0…). Real-world auth isn't just "sign a JWT". It's stateful sessions with device lists and instant revocation, social login with OAuth redirects on both frontend and backend, linking a Google sign-in to an existing email/password account, and more. Providers have security teams on it 24/7. Revisit building your own when the bill reaches five figures and you have the revenue and people. But you still need to understand how it works to integrate it safely.</p>
+
+<h3>Storing passwords: an arms race</h3>
+<figure class="anim" data-steps id="fig-pw">
+  <figcaption class="anim-title">Each defence, and the attack that beat it</figcaption>
+  <div class="frame" data-note="Breaches happen to companies of every size (insiders, third-party leaks…). Most people reuse passwords, so one leak unlocks their accounts elsewhere. And every employee with database access can read them.">
+    <div class="split"><div><h5>Store</h5><pre>password = "12345"</pre></div><div><h5>Attack</h5><pre>Database leaks → every password is
+readable → credential stuffing on
+other sites</pre></div></div>
+  </div>
+  <div class="frame" data-note="A hash is <b>one-way</b>, fixed-length and deterministic. You compare hashes at login and never store the password itself.">
+    <div class="split"><div><h5>Store</h5><pre>hash("12345") = "5994471abb01…"</pre></div><div><h5>Defends against</h5><pre>Reading passwords straight out
+of a leaked table</pre></div></div>
+  </div>
+  <div class="frame" data-note="Attackers precompute hashes of millions of common passwords. Same input, same hash, so a simple lookup reverses many of them.">
+    <div class="split"><div><h5>Store</h5><pre>hash("12345") = "5994471abb01…"</pre></div><div><h5>Attack: rainbow table</h5><pre>"5994471abb01…" → "12345"   ✕
+"5e884898da28…" → "password" ✕</pre></div></div>
+  </div>
+  <div class="frame" data-note="A <b>salt</b> is a random value per user (from a cryptographically secure generator), stored next to the hash. Identical passwords now produce different hashes, so precomputed tables match nothing.">
+    <div class="split"><div><h5>Store</h5><pre>salt = "SP3x9…" (random per user)
+hash("12345" + salt) = "c1f0…"</pre></div><div><h5>Defends against</h5><pre>Rainbow tables: zero matches</pre></div></div>
+  </div>
+  <div class="frame" data-note="GPUs compute <b>billions</b> of SHA-256 hashes per second. With the salt in hand, an attacker can brute-force every short password offline within days.">
+    <div class="split"><div><h5>Store</h5><pre>sha256("12345" + salt)</pre></div><div><h5>Attack: GPU brute force</h5><pre>for each guess:
+  sha256(guess + salt) == leaked? ✕
+billions of guesses / second</pre></div></div>
+  </div>
+  <div class="frame" data-note="Use a deliberately <b>slow</b> password hash (Argon2id today, bcrypt or scrypt also fine) with a tunable <b>cost factor</b>. 400 ms is unnoticeable at login and ruinous for an attacker. MD5 and SHA-256 are for file integrity, not passwords.">
+    <div class="split"><div><h5>Store</h5><pre>argon2id(password, salt, cost) ≈ 400 ms</pre></div><div><h5>Result</h5><pre>user login: +0.4 s (unnoticed)
+attacker:   ~2–3 guesses/s per core
+            → decades, not days ✓</pre></div></div>
+  </div>
+</figure>
+<div class="table-wrap"><table>
+  <thead><tr><th>Hash</th><th>One guess</th><th>A billion guesses (one core / one GPU)</th></tr></thead>
+  <tbody>
+    <tr><td>SHA-256 on a GPU</td><td>~1 ns</td><td><span class="chip bad">about a second</span></td></tr>
+    <tr><td>Argon2id tuned to 400 ms</td><td>400 ms</td><td><span class="chip ok">about 12.7 years</span></td></tr>
+  </tbody>
+</table></div>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>A slow hash is a 400 ms speed bump at your front door. Residents barely notice it once a day. A burglar trying a billion keys is stuck there for a decade.</p></aside>
+
+<h3>Sessions and cookie flags</h3>
+<p>After login, the server issues a <strong>random session ID</strong> (at least 128 bits from a CSPRNG, so it can't be guessed), stores it in Redis or the database with the user, expiry, IP and user agent (handy for a "your devices" page), and sends it in a cookie.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Flag</th><th>Effect</th><th>Stops</th></tr></thead>
+  <tbody>
+    <tr><td><code>HttpOnly</code></td><td>JavaScript can't read the cookie</td><td>XSS stealing sessions (and why tokens don't belong in localStorage)</td></tr>
+    <tr><td><code>Secure</code></td><td>Sent over HTTPS only</td><td>Sniffing on public Wi-Fi or by a malicious router</td></tr>
+    <tr><td><code>SameSite=Strict</code></td><td>Only sent on requests from your own site</td><td>CSRF</td></tr>
+    <tr><td><code>SameSite=Lax</code></td><td>Also sent on top-level link navigation, not images, iframes or cross-site forms</td><td>Most CSRF (browser default)</td></tr>
+    <tr><td><code>SameSite=None</code></td><td>Sent everywhere; requires <code>Secure</code></td><td>Nothing. Avoid for session cookies.</td></tr>
+  </tbody>
+</table></div>
+
+<h3>JWTs: the security trade-offs</h3>
+<ul>
+  <li><strong>Revocation is hard.</strong> A user reports a hacked account and you can't log out their devices. Workarounds: a blocklist in Redis, or <strong>short-lived access tokens with refresh tokens</strong>.</li>
+  <li><strong>The payload is only base64.</strong> Tampering breaks the signature, but anyone can <em>read</em> it. No secrets inside.</li>
+  <li><strong>Storage:</strong> localStorage is readable by any XSS. An HttpOnly cookie is safer, and then you're most of the way back to sessions.</li>
+</ul>
+<figure class="anim" id="fig-refresh">
+  <figcaption class="anim-title">Access + refresh tokens limit the damage of a stolen token</figcaption>
+</figure>
+<aside class="callout ok"><div class="tag">Recommendation</div><p>Prefer <strong>stateful sessions</strong>; they scale fine across servers with Redis. If you use JWTs: expiry in minutes to hours (not days), a refresh flow with server-side storage, and HttpOnly cookies.</p></aside>
+
+<h3>Rate limiting, in layers</h3>
+<p>Without it, attackers try millions of passwords, or simply flood and crash your server. Be strict on auth endpoints and more generous elsewhere. One layer is never enough:</p>
+<figure class="anim" id="fig-rl">
+  <figcaption class="anim-title">Each layer catches what the previous one misses</figcaption>
+</figure>
+
+<h2 id="authz">Authorization: the most common hole</h2>
+<p>A typical setup: a <code>requireAuth</code> middleware and a permission check (<code>read:invoices</code>) at the routing layer. Then a false sense of security sets in: <em>authenticated, has the permission, so anything goes</em>. But having permission to read invoices doesn't mean permission to read <strong>everyone's</strong> invoices.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>A hotel key card that opens the lift (authentication) and the "guest floors" (permission), but where no door checks the room number. Every room is now your room.</p></aside>
+<figure class="anim" id="fig-bola">
+  <figcaption class="anim-title">Try it: you're Alice. Fetch invoices by ID.</figcaption>
+  <div class="widget">
+    <div class="row">
+      <label>Server implementation <select id="bo-mode">
+        <option value="none">✕ No ownership check</option>
+        <option value="403">~ Fetch, then compare owner → 403</option>
+        <option value="scoped" selected>✓ Scoped query → 404</option>
+      </select></label>
+    </div>
+    <div class="presets" id="bo-ids"></div>
+    <pre id="bo-out" style="margin:12px 0 0;min-height:6em">Pick an invoice ID.</pre>
+    <div class="row" style="margin:10px 0 0"><button class="ghost" type="button" id="bo-enum">▶ Run attacker's enumeration script (101–110)</button></div>
+    <p class="out" id="bo-learn" style="margin:6px 0 0"></p>
+  </div>
+</figure>
+<pre><span class="k">SELECT</span> * <span class="k">FROM</span> invoices <span class="k">WHERE</span> id = <span class="n">$1</span> <span class="k">AND</span> user_id = <span class="n">$2</span>;  <span class="c">-- $2 = ctx.userId, from verified auth</span>
+<span class="c">-- no rows → 404. Do the same for UPDATE, DELETE and INSERT.</span></pre>
+<div class="cards">
+  <div class="card"><h4>BOLA / IDOR</h4><p><strong>Broken object-level authorization</strong> (insecure direct object reference). Ownership isn't checked where the data is accessed. Fix: scope every query to the user.</p></div>
+  <div class="card"><h4>Don't confirm existence</h4><p>A 403 for someone else's invoice tells attackers it <em>exists</em>, which is fuel for enumeration and social engineering. Return 404 for both "missing" and "not yours".</p></div>
+  <div class="card"><h4>BFLA</h4><p><strong>Broken function-level authorization</strong>: <code>/admin/invoices</code> "protected" only by nobody knowing the URL. That's security through obscurity. Add a <strong>role check</strong> (admin) on top of permissions.</p></div>
+  <div class="card"><h4>Guessable IDs</h4><p>Sequential IDs (101, 102, 103…) invite enumeration. UUIDs make guessing impractical (with some performance trade-offs to read up on).</p></div>
+</div>
+<div class="split">
+  <div class="card"><h4>↔ Horizontal attack</h4><p>User A reaches <strong>user B's</strong> data. Same privilege level, wider scope. (BOLA/IDOR.)</p></div>
+  <div class="card"><h4>↕ Vertical attack</h4><p>A member reaches <strong>admin</strong> functions. Higher privilege. (BFLA.)</p></div>
+</div>
+<aside class="callout ok"><div class="tag">Prevent it systematically</div><ul>
+  <li><strong>Centralise</strong> authorization logic instead of scattering ad-hoc checks.</li>
+  <li><strong>Default deny</strong>: anything not explicitly allowed is refused, so new endpoints start out protected.</li>
+  <li><strong>Automated authorization tests</strong> in CI: A can't read B's data, members can't call admin endpoints, anonymous users get nothing.</li>
+  <li><strong>Audit logs</strong>: record sensitive access, and flag failed authorization checks as possible probing.</li>
+</ul></aside>
+
+<h2 id="xss">Cross-site scripting (XSS)</h2>
+<p>XSS means an attacker's JavaScript runs in <em>other users'</em> browsers, inside your site. From there it can read the page, call your API as the victim, steal non-HttpOnly cookies and localStorage, redirect to phishing pages, or rewrite what the user sees.</p>
+<figure class="anim" id="fig-xss">
+  <figcaption class="anim-title">Stored XSS through a comment box</figcaption>
+</figure>
+<ul>
+  <li><strong>Stored XSS</strong>: the payload is saved (a comment) and served to everyone. <strong>Reflected XSS</strong>: it comes from the URL. <strong>DOM-based XSS</strong>: client code writes untrusted data into <code>innerHTML</code>. React names its escape hatch <code>dangerouslySetInnerHTML</code> for a reason.</li>
+  <li>Same root cause as SQL injection: <strong>user content treated as code</strong>, this time in the browser's HTML/JS context.</li>
+  <li><strong>Prevent it</strong> by sanitizing user-supplied markup on the server before storing it (and escaping on output).</li>
+  <li><strong>Limit the damage</strong> with a <strong>Content-Security-Policy</strong> header. It's a last line of defence, not a fix:</li>
+</ul>
+<pre>Content-Security-Policy: default-src 'self'; script-src 'self'; img-src 'self' https://cdn.example.com
+<span class="c"># no inline scripts, scripts only from our origin, images only from known hosts</span></pre>
+
+<h2 id="csrf">CSRF, briefly</h2>
+<p>Browsers attach cookies to requests for a site, even when another site triggers the request. You're logged in to <code>bank.com</code>; <code>evil.com</code> auto-submits a hidden form to <code>bank.com/transfer</code>, and your cookie rides along. With modern stacks this is largely handled: browsers default cookies to <strong>SameSite=Lax</strong>, and a strict CORS policy adds another layer. Keep session cookies Strict or Lax, never None.</p>
+
+<h2 id="misconfig">Misconfiguration</h2>
+<div class="cards">
+  <div class="card"><h4>Secrets in Git</h4><p>Anyone with repo access gets your database and API keys. Deleting the file isn't enough, because it's still in the history. <strong>Rotate the secret immediately.</strong> Keep secrets in env vars or a secret manager (lesson 17).</p></div>
+  <div class="card"><h4>Debug logging in production</h4><p>Stack traces, raw SQL, config and user data in logs give an attacker a blueprint if the logs leak. Production runs at <code>info</code>.</p></div>
+  <div class="card"><h4>Missing security headers</h4><p><code>X-Frame-Options</code> stops your site being framed for clickjacking; add HSTS, nosniff and CSP too. Most frameworks provide a one-line security middleware (e.g. helmet).</p></div>
+</div>
+
+<h2 id="layers">Boundaries and defence in depth</h2>
+<p>Every attack in this lesson is <strong>data crossing a boundary</strong>: user input into SQL, markdown into HTML, one user's request into another user's data. Every time data crosses one, ask:</p>
+<ol>
+  <li>Where is data crossing a boundary here?</li>
+  <li>What am I assuming about it?</li>
+  <li>What happens if that assumption is wrong?</li>
+</ol>
+<p>And because no single defence is perfect, stack them:</p>
+<div class="stages" style="margin:10px 0 6px">
+  <span class="st ok">1 · Input validation</span><span class="arrow">→</span><span class="st ok">2 · Parameterized operations</span><span class="arrow">→</span><span class="st ok">3 · Authorization at the point of access</span><span class="arrow">→</span><span class="st ok">4 · Headers &amp; policies (CORS, CSP)</span><span class="arrow">→</span><span class="st ok">5 · Monitoring &amp; alerts</span>
+</div>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>A castle doesn't rely on one wall. Moat, outer wall, gate, guards and a keep: an attacker has to beat <em>all</em> of them, and each one buys you time to notice.</p></aside>
+<h3>Keep learning</h3>
+<ul>
+  <li><strong>PortSwigger Web Security Academy</strong>: free, hands-on labs for SQLi, XSS, CSRF, SSRF, clickjacking, OAuth, JWT attacks and more.</li>
+  <li><strong>OWASP Top 10</strong>: the most critical web risks, with broken access control at #1.</li>
+  <li><strong>OWASP Cheat Sheet Series</strong>: concise best practices per topic (authentication, session management…).</li>
+</ul>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>Attackers exploit assumptions. Never trust input, identity or the request's origin.</li>
+  <li>Injection happens when data is interpreted as code. Use parameters and argument arrays, never string concatenation.</li>
+  <li>Store passwords with a slow, salted hash (Argon2id). Issue random session IDs in HttpOnly, Secure, SameSite cookies.</li>
+  <li>Prefer stateful sessions. If you use JWTs, keep them short-lived with refresh tokens.</li>
+  <li>Rate-limit in layers: per IP, per account and global, plus alerts.</li>
+  <li>Check authorization where data is accessed. Scope queries to the user, return 404 instead of 403, and add role checks for admin functions.</li>
+  <li>Sanitize user markup, add CSP, keep secrets out of Git and debug logs out of production.</li>
+  <li>Defend in layers, and keep asking where data crosses a boundary.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Your API returns 403 when Alice requests Bob's invoice. What's the subtle problem?</summary><div><p>It confirms the invoice exists. An attacker can enumerate IDs to map your data. Scope the query to the user and return 404 for both "missing" and "not yours".</p></div></details>
+  <details><summary>Why is SHA-256 a poor choice for password hashing even with a salt?</summary><div><p>It's designed to be fast. GPUs compute billions per second, so leaked salted hashes can still be brute-forced. Use a slow, tunable hash like Argon2id or bcrypt.</p></div></details>
+  <details><summary>An attacker tries the password "Summer2024!" once on 50,000 accounts from rotating IPs. Which rate limit catches it?</summary><div><p>A global limit on failed logins (with alerting and captcha). Per-IP limits miss rotating IPs, and per-account lockouts miss a single attempt per account.</p></div></details>
+  <details><summary>You accidentally pushed a Stripe key to GitHub and force-pushed a fix a minute later. Are you safe?</summary><div><p>No. Treat it as leaked: it may have been scraped instantly, and forks or caches can keep it. Revoke and rotate the key now, then move secrets to env vars or a secret manager.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.flow("#fig-langs", {
+  w: 720, h: 270,
+  nodes: {
+    user: { x: 80, y: 135, label: "User input", sub: "a text field", kind: "client", w: 130 },
+    app: { x: 330, y: 135, label: "Your backend", sub: "", kind: "server", w: 150, h: 64 },
+    db: { x: 600, y: 45, label: "Database", sub: "speaks SQL", kind: "db", w: 150 },
+    br: { x: 600, y: 135, label: "Browser", sub: "speaks HTML / JS", kind: "client", w: 150 },
+    os: { x: 600, y: 225, label: "Operating system", sub: "speaks shell", kind: "ext", w: 160 }
+  },
+  edges: [["user", "app"], ["app", "db"], ["app", "br"], ["app", "os"]],
+  steps: [
+    { path: ["user", "app"], packet: "' OR 1=1 --", hl: ["app"], note: "Input arrives as harmless-looking text…" },
+    { path: ["app", "db"], tone: "bad", bad: ["db"], set: { db: "SQL injection" }, note: "…glued into a SQL string, its quotes and dashes become <b>SQL syntax</b>." },
+    { path: ["app", "br"], tone: "bad", packet: "<script>", bad: ["br"], set: { db: "SQL injection", br: "XSS" }, note: "Rendered into a page unescaped, <code>&lt;script&gt;</code> becomes <b>code in other users' browsers</b>." },
+    { path: ["app", "os"], tone: "bad", packet: "; rm -rf /", bad: ["os"], set: { db: "SQL injection", br: "XSS", os: "command injection" }, note: "Passed to a shell, <code>;</code> ends your command and starts <b>the attacker's</b>." },
+    { path: [["app", "db"], ["app", "br"], ["app", "os"]], tone: "ok", ok: ["db", "br", "os"], set: { db: "parameters", br: "escaping + CSP", os: "argument arrays" }, note: "One cure for all: keep data as data with APIs that separate structure from values." }
+  ]
+});
+
+(function () {
+  var fig = document.getElementById("fig-sqli");
+  var parts = fig.querySelectorAll("[data-part]");
+  var notes = [
+    "The server's template, written by you. The opening quote expects an email to follow.",
+    "The attacker's first character, a quote, <b>closes the string</b>. The condition is now <code>email = ''</code>.",
+    "<code>OR '1'='1'</code> is always true, so the WHERE clause matches <b>every row</b>.",
+    "<code>--</code> starts a SQL comment…",
+    "…which swallows the server's closing quote, so there's no syntax error. Result: the query returns all users. With parameters, this whole input would just be a strange email that matches nothing."
+  ];
+  new BD.Player(fig, notes.length, {
+    start: 0, minDelay: 2600,
+    note: function (i) { return notes[i]; },
+    render: function (i) { parts.forEach(function (p) { p.classList.toggle("mark", +p.dataset.part === i + 1); }); }
+  });
+})();
+
+BD.seq("#fig-refresh", {
+  actors: ["Client", "API", "Token store"],
+  colW: 230,
+  steps: [
+    { from: 0, to: 1, label: "POST /login", note: "The user logs in." },
+    { from: 1, to: 2, label: "save refresh token (7 d)", note: "The server stores the long-lived refresh token, so it can be revoked." },
+    { from: 1, to: 0, label: "access (5 min) + refresh (7 d)", ret: true, tone: "ok", note: "The client receives a <b>short-lived access token</b> and a refresh token, ideally in HttpOnly cookies." },
+    { from: 0, to: 1, label: "GET /data · access token", note: "Normal requests carry the access token." },
+    { from: 1, to: 0, label: "401 (expired after 5 min)", ret: true, tone: "warn", note: "Five minutes later it expires: 401." },
+    { from: 0, to: 1, label: "POST /refresh · refresh token", note: "The client trades the refresh token for a new pair." },
+    { from: 1, to: 2, label: "valid? rotate", note: "The server checks the refresh token against the store and <b>rotates</b> it." },
+    { from: 1, to: 0, label: "new access + new refresh", ret: true, tone: "ok", note: "A stolen <i>access</i> token is only useful for minutes, and refresh tokens can be revoked in the store." }
+  ]
+});
+
+BD.flow("#fig-rl", {
+  w: 720, h: 250,
+  nodes: {
+    atk: { x: 80, y: 75, label: "Attacker", sub: "", kind: "ext", w: 130 },
+    ip: { x: 270, y: 75, label: "Per-IP limit", sub: "10 / min per IP", kind: "net", w: 140 },
+    acct: { x: 450, y: 75, label: "Per-account lock", sub: "5 fails / 15 min", kind: "net", w: 150 },
+    glob: { x: 630, y: 75, label: "Global limit", sub: "100 fails / min", kind: "net", w: 140 },
+    login: { x: 450, y: 190, label: "Login endpoint", kind: "server", w: 140 }
+  },
+  edges: [["atk", "ip"], ["ip", "acct"], ["acct", "glob"], ["glob", "login"]],
+  steps: [
+    { path: ["atk", "ip"], packet: "1 IP · 1,000 guesses", set: { atk: "single IP" }, bad: ["ip"], note: "<b>Brute force from one IP</b>: the per-IP limit blocks it after 10 tries. (Caveat: offices and universities share one IP.)" },
+    { path: ["atk", "ip", "acct"], packet: "botnet → alice@…", fresh: true, set: { atk: "rotating IPs, one account" }, ok: ["ip"], bad: ["acct"], note: "<b>Botnet with rotating IPs</b> sails past per-IP limits, but hammering one account trips the <b>per-account lock</b>." },
+    { path: ["atk", "ip", "acct", "glob"], packet: "\"Summer2024!\" × 50k accounts", fresh: true, set: { atk: "password spraying" }, ok: ["ip", "acct"], bad: ["glob"], note: "<b>Password spraying</b>: one common password, once per account, from many IPs, so it passes both layers. The <b>global</b> failed-login threshold trips." },
+    { path: ["glob", "login"], tone: "warn", fresh: true, set: { atk: "password spraying", glob: "alert + captcha" }, warn: ["glob"], note: "Raise an alert, require captcha, block offending ranges. Layers protect both your users' accounts <i>and</i> your servers from overload." }
+  ]
+});
+
+(function () {
+  var inv = { 101: { owner: "alice", amount: 120 }, 102: { owner: "bob", amount: 5400 }, 103: { owner: "alice", amount: 75 }, 104: { owner: "carol", amount: 990 }, 106: { owner: "dave", amount: 310 }, 108: { owner: "alice", amount: 42 } };
+  var mode = document.getElementById("bo-mode"), out = document.getElementById("bo-out"), learn = document.getElementById("bo-learn");
+  function respond(id) {
+    var i = inv[id], m = mode.value;
+    if (m === "none") return i ? { s: 200, b: { id: id, owner: i.owner, amount: i.amount } } : { s: 404, b: { error: "Invoice not found" } };
+    if (m === "403") { if (!i) return { s: 404, b: { error: "Invoice not found" } }; if (i.owner !== "alice") return { s: 403, b: { error: "Forbidden" } }; return { s: 200, b: { id: id, owner: i.owner, amount: i.amount } }; }
+    return i && i.owner === "alice" ? { s: 200, b: { id: id, owner: i.owner, amount: i.amount } } : { s: 404, b: { error: "Invoice not found" } };
+  }
+  var sql = { none: "SELECT * FROM invoices WHERE id = $1", "403": "SELECT * FROM invoices WHERE id = $1   -- then: if owner != me → 403", scoped: "SELECT * FROM invoices WHERE id = $1 AND user_id = $2" };
+  [101, 102, 103, 104, 105].forEach(function (id) {
+    var b = document.createElement("button"); b.type = "button"; b.textContent = "GET /invoices/" + id;
+    b.addEventListener("click", function () {
+      var r = respond(id), i = inv[id];
+      var verdict = r.s === 200 && i.owner !== "alice" ? "\n\n✕ Leaked another user's invoice!" : (r.s === 403 ? "\n\n~ Blocked, but now the attacker knows invoice " + id + " exists." : "");
+      out.textContent = sql[mode.value] + "\n\nHTTP/1.1 " + r.s + "\n" + JSON.stringify(r.b) + verdict;
+    });
+    document.getElementById("bo-ids").appendChild(b);
+  });
+  document.getElementById("bo-enum").addEventListener("click", function () {
+    var leaked = [], exists = [];
+    for (var id = 101; id <= 110; id++) { var r = respond(id); if (r.s === 200 && inv[id].owner !== "alice") leaked.push(id); if (r.s === 403) exists.push(id); }
+    if (mode.value === "none") learn.innerHTML = "<b style='color:var(--bad)'>Horizontal breach:</b> the script downloaded other users' invoices " + leaked.join(", ") + ", including Bob's $5,400. That's BOLA/IDOR.";
+    else if (mode.value === "403") learn.innerHTML = "<b style='color:var(--warn)'>Information leak:</b> no data stolen, but the script now knows invoices " + exists.join(", ") + " exist and belong to someone else, ready for social engineering.";
+    else learn.innerHTML = "<b style='color:var(--ok)'>Nothing learned:</b> every ID that isn't Alice's looks exactly like an ID that doesn't exist (404).";
+  });
+  mode.addEventListener("change", function () { out.textContent = "Pick an invoice ID."; learn.textContent = ""; });
+})();
+
+BD.flow("#fig-xss", {
+  w: 720, h: 270,
+  nodes: {
+    atk: { x: 80, y: 60, label: "Attacker", sub: "posts a comment", kind: "ext", w: 130 },
+    srv: { x: 330, y: 60, label: "Server", sub: "stores as-is", kind: "server", w: 140 },
+    db: { x: 590, y: 60, label: "Comments DB", kind: "db", w: 150 },
+    vic: { x: 330, y: 210, label: "Victim's browser", sub: "opens the post", kind: "client", w: 170 },
+    evil: { x: 610, y: 210, label: "evil.com", sub: "attacker's server", kind: "ext", w: 140 }
+  },
+  edges: [["atk", "srv"], ["srv", "db"], ["srv", "vic"], ["vic", "evil", { dashed: true }]],
+  steps: [
+    { path: ["atk", "srv", "db"], packet: "Nice post! <script>…<\/script>", warn: ["db"], set: { db: "<script> saved" }, note: "The attacker posts a comment with a hidden <code>&lt;script&gt;</code>. The server stores it <b>without sanitizing</b>." },
+    { path: ["db", "srv", "vic"], packet: "comment HTML", bad: ["vic"], set: { db: "<script> saved", vic: "script runs!" }, note: "Every visitor's page injects the stored HTML into the DOM, so the script <b>runs in their browser, as your site</b>." },
+    { path: ["vic", "evil"], tone: "bad", packet: "cookies, localStorage", bad: ["evil"], set: { db: "<script> saved", vic: "script runs!", evil: "sessions stolen" }, note: "It ships non-HttpOnly cookies and localStorage tokens to the attacker, or calls your API as the victim." },
+    { path: ["atk", "srv"], tone: "ok", fresh: true, packet: "<script>…", ok: ["srv"], set: { srv: "sanitize → strip <script>" }, note: "<b>Fix:</b> sanitize user markup on the server before storing it (and escape on output)…" },
+    { path: ["srv", "vic"], tone: "ok", ok: ["vic"], set: { srv: "sanitize → strip <script>", vic: "CSP: inline script blocked" }, note: "…and send a CSP that forbids inline scripts, so even a missed payload won't run. HttpOnly cookies keep sessions out of reach anyway." }
+  ]
+});
+</script>
+</body>
+</html>
