@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Graceful shutdown · Backend Dev</title>
+<meta name="description" content="Signals, connection draining and resource cleanup, so deploys never drop a request.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="19">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 19</span><span>Video · 35:56</span></div>
+  <h1>Graceful shutdown</h1>
+  <p class="lead">Even with zero-downtime deploys, the old server must eventually stop, perhaps in the middle of someone's payment. <strong>Graceful shutdown</strong> teaches your backend good manners: stop taking new work, finish what's in progress, clean up, <em>then</em> exit. No lost requests, no double charges, no corrupted data.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Process lifecycles and Unix signals</li><li>SIGTERM, SIGINT and SIGKILL, and why the last one is unstoppable</li><li>Connection draining and choosing a timeout</li><li>Cleaning up resources in reverse order</li><li>What graceful shutdown looks like in real code</li></ul></div>
+</div>
+<h2 id="why">The moment that matters</h2>
+<p>You're buying something on Amazon. Mid-payment, a deploy replaces the server handling your request. Does the payment vanish? Do you get charged twice by a race condition? This problem is as old as servers, and the answer is a graceful shutdown.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>When it's late and your guests need to leave, you don't shove them out and slam the door. You let conversations wrap up, say goodbye, tidy up, and <em>then</em> close the door. That's the behaviour we want from a server.</p></aside>
+
+<h2 id="signals">Processes and signals</h2>
+<p>Your backend runs as a <strong>process</strong>: it's born when it starts, lives while running, and dies when it's terminated. When the operating system wants it to stop, it doesn't just pull the plug; it follows a protocol. On Unix-like systems (Linux, which nearly every server runs, and macOS), that protocol is <strong>signals</strong>, a form of inter-process communication. Your app registers <strong>handlers</strong> that run when a signal arrives.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Signal</th><th>Meaning</th><th>Sent by</th><th>Can you handle it?</th></tr></thead>
+  <tbody>
+    <tr><td><code>SIGTERM</code></td><td>"Could you please finish up and leave?" A polite nudge.</td><td>Kubernetes, systemd, PM2, deploy tools</td><td><span class="chip ok">yes</span></td></tr>
+    <tr><td><code>SIGINT</code></td><td>Interrupt: you pressed <kbd>Ctrl</kbd>+<kbd>C</kbd></td><td>A developer at a terminal</td><td><span class="chip ok">yes</span>, treat it like SIGTERM</td></tr>
+    <tr><td><code>SIGKILL</code></td><td>Die. Now.</td><td>The OS or orchestrator, when you ignored the polite signals</td><td><span class="chip bad">no</span>: can't be caught or ignored</td></tr>
+  </tbody>
+</table></div>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>SIGTERM and SIGINT are clicking "Shut down" on your computer. SIGKILL is yanking the power cord out of the wall. Respect the polite signals, or the plug gets pulled with no chance to clean up.</p></aside>
+<figure class="anim" id="fig-conv">
+  <figcaption class="anim-title">The shutdown conversation during a deploy</figcaption>
+</figure>
+
+<h2 id="draining">Step 1: drain connections</h2>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>At closing time a restaurant doesn't switch off the lights on diners. First the door staff <strong>stop letting new customers in</strong>. Then they tell everyone inside: "We're closing in 20 minutes, take your time." People finish, pay and leave.</p></aside>
+<p>For your backend, <strong>connection draining</strong> means:</p>
+<ol>
+  <li><strong>Stop accepting new connections and requests.</strong></li>
+  <li><strong>Let in-flight requests finish</strong>; at any moment there might be 10 or 600 of them.</li>
+  <li><strong>Then close.</strong></li>
+</ol>
+<div class="cards">
+  <div class="card"><h4>HTTP server</h4><p>Refuse new requests and complete the in-flight ones.</p></div>
+  <div class="card"><h4>Database</h4><p>Finish running queries and transactions; accept no new ones.</p></div>
+  <div class="card"><h4>WebSockets</h4><p>Tell connected clients you're closing, <em>then</em> close the sockets.</p></div>
+</div>
+<h3>The timeout trade-off</h3>
+<p>You can't wait forever. Production systems set a hard limit, commonly <strong>30 seconds</strong> (Kubernetes' default grace period). Too short and you cut off legitimate work; too long and deploys crawl. Base it on your real request durations: 30 s is plenty for a typical API, while long-lived WebSocket or streaming workloads may need more thought.</p>
+<p class="muted small">Draining also involves the load balancer and service discovery: the instance is deregistered and its health checks start failing, so no new traffic is routed to it.</p>
+
+<h2 id="cleanup">Step 2: clean up resources</h2>
+<p>Before leaving your desk, you put the mug in the sink and coil the cables. Your process must release what it acquired:</p>
+<div class="cards">
+  <div class="card"><h4>Database connections</h4><p>Commit or roll back open transactions <em>explicitly</em>, then close the pool. Abandoned transactions can lead to deadlocks or inconsistent data.</p></div>
+  <div class="card"><h4>Network connections</h4><p>The OS limits how many a process can hold; leaks waste memory and hurt performance.</p></div>
+  <div class="card"><h4>File handles &amp; temp files</h4><p>Unreleased handles pile up and eat memory.</p></div>
+  <div class="card"><h4>Caches, queues, workers</h4><p>Let background workers finish their current job, then close Redis.</p></div>
+</div>
+<aside class="callout analogy"><div class="tag">Reverse order</div><p>You put on socks, then shoes; you take off shoes, then socks. Release resources in the <strong>reverse order you acquired them</strong>, so nothing is torn down while something that depends on it is still running.</p></aside>
+
+<h2 id="timeline">The whole sequence</h2>
+<figure class="anim" id="fig-timeline">
+  <figcaption class="anim-title">From SIGTERM to exit</figcaption>
+</figure>
+
+<h2 id="code">In code</h2>
+<p>Your framework or library usually provides the hard parts (a <code>Shutdown</code> or <code>close</code> method that stops accepting and drains). Your job is to wire signals to them in the right order:</p>
+<div class="tabs">
+  <div class="tab" data-label="Go">
+<pre>ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+<span class="k">defer</span> stop()
+<span class="k">go</span> server.ListenAndServe()
+
+&lt;-ctx.Done()                                   <span class="c">// block until SIGINT or SIGTERM</span>
+log.Info().Msg(<span class="s">"shutdown signal received"</span>)
+
+shutdownCtx, cancel := context.WithTimeout(context.Background(), <span class="n">30</span>*time.Second)
+<span class="k">defer</span> cancel()
+server.Shutdown(shutdownCtx)  <span class="c">// stop accepting, drain in-flight requests</span>
+jobs.Shutdown()               <span class="c">// let workers finish, close Redis</span>
+db.Close()                    <span class="c">// acquired first, released last</span>
+log.Info().Msg(<span class="s">"server exited cleanly"</span>)</pre>
+  </div>
+  <div class="tab" data-label="Node.js">
+<pre><span class="k">async function</span> shutdown(signal) {
+  logger.info({ signal }, <span class="s">"shutdown signal received"</span>);
+  setTimeout(() =&gt; process.exit(<span class="n">1</span>), <span class="n">30_000</span>).unref(); <span class="c">// hard deadline</span>
+  <span class="k">await new</span> Promise(r =&gt; server.close(r));  <span class="c">// stop accepting, finish in-flight</span>
+  <span class="k">await</span> worker.close();                      <span class="c">// finish current jobs</span>
+  <span class="k">await</span> redis.quit();
+  <span class="k">await</span> pool.end();                          <span class="c">// close DB connections last</span>
+  process.exit(<span class="n">0</span>);
+}
+process.on(<span class="s">"SIGTERM"</span>, shutdown);
+process.on(<span class="s">"SIGINT"</span>, shutdown);</pre>
+  </div>
+</div>
+<p>In the video's demo (a Go backend), pressing <kbd>Ctrl</kbd>+<kbd>C</kbd> logs "interrupt signal received", closes the HTTP server and database, shuts down the Asynq job server ("waiting for all workers to finish… all workers have finished"), then "server exited". It takes about a second, because nothing was in flight.</p>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>Every deploy stops an old process. Graceful shutdown makes sure that never interrupts real work.</li>
+  <li>The OS talks to your process with signals: handle SIGTERM and SIGINT the same way; SIGKILL can't be handled.</li>
+  <li>Drain first: stop accepting new requests, let in-flight ones finish, within a timeout (often 30 s).</li>
+  <li>Then clean up: commit or roll back transactions, close pools, connections and file handles, in reverse order of acquisition.</li>
+  <li>If you ignore the polite signals, the orchestrator will eventually SIGKILL you, mid-request.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Kubernetes sends SIGTERM but your app has no handler. What happens to in-flight requests?</summary><div><p>By default SIGTERM terminates the process immediately, so in-flight requests are cut off. (If the process ignored it, Kubernetes would SIGKILL it after the grace period anyway.) Either way, requests are lost: add a handler that drains.</p></div></details>
+  <details><summary>Your server opened the DB pool, then Redis, then started the HTTP listener. What order do you shut down?</summary><div><p>HTTP listener → Redis/workers → DB pool: the reverse of acquisition, so nothing still in use loses its dependencies.</p></div></details>
+  <details><summary>Why not set the shutdown timeout to 10 minutes "just to be safe"?</summary><div><p>Deploys and scaling would hang for minutes, and a stuck request would block everything. Pick a limit based on your real request durations.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.seq("#fig-conv", {
+  actors: ["Orchestrator (K8s)", "Load balancer", "Old instance", "Database"],
+  colW: 180, rowH: 42,
+  steps: [
+    { from: 0, to: 0, label: "new instance is healthy", tone: "ok", note: "A deploy starts a new instance. Once it passes its health checks, the old one must go." },
+    { from: 0, to: 1, label: "deregister old instance", note: "Traffic routing is updated so <b>no new requests</b> reach the old instance." },
+    { from: 0, to: 2, label: "SIGTERM", tone: "warn", note: "The orchestrator politely asks the old process to stop: <b>SIGTERM</b>. Its grace-period timer starts (often 30 s)." },
+    { from: 2, to: 2, label: "stop accepting · finish 12 in-flight requests", note: "The signal handler kicks in: refuse new connections and let in-flight requests (including that payment) complete." },
+    { from: 2, to: 3, label: "commit / roll back · close pool", note: "Clean up: finish or roll back transactions, then close database connections." },
+    { from: 2, to: 0, label: "exit 0", ret: true, tone: "ok", note: "Everything is released, so the process exits cleanly. No request was dropped." },
+    { over: [0, 2], text: "had it hung past 30 s → SIGKILL (no cleanup possible)", tone: "bad", note: "If the app had ignored SIGTERM or got stuck, the orchestrator would send <b>SIGKILL</b> after the grace period: instant death, mid-request." }
+  ]
+});
+
+BD.timeline("#fig-timeline", {
+  lanes: ["Signal", "New requests", "Request A", "Request B", "Job worker", "Redis", "DB pool"],
+  total: 12, unit: "s", ticks: 6, labelW: 110,
+  legend: [{ k: "ok", label: "serving / running" }, { k: "bad", label: "rejected / signal" }, { k: "io", label: "draining / finishing" }, { k: "wait", label: "closing" }],
+  segs: [
+    { lane: 0, s: 2, d: .4, k: "bad", t: "" },
+    { lane: 1, s: 0, d: 2, k: "ok", t: "accepting" }, { lane: 1, s: 2.4, d: 9.6, k: "bad", t: "refused → routed to new instance" },
+    { lane: 2, s: 0.5, d: 1.5, k: "ok" }, { lane: 2, s: 2, d: 2.5, k: "io", t: "finishing" },
+    { lane: 3, s: 1.5, d: 0.5, k: "ok" }, { lane: 3, s: 2, d: 5, k: "io", t: "payment completes" },
+    { lane: 4, s: 0, d: 2, k: "ok" }, { lane: 4, s: 2, d: 6, k: "io", t: "finish current job" }, { lane: 4, s: 8, d: .6, k: "wait" },
+    { lane: 5, s: 0, d: 8.6, k: "ok" }, { lane: 5, s: 8.6, d: .7, k: "wait", t: "" },
+    { lane: 6, s: 0, d: 9.3, k: "ok" }, { lane: 6, s: 9.3, d: 1.2, k: "wait", t: "close" }
+  ],
+  steps: [
+    { to: 2.4, note: "Normal operation… then <b>SIGTERM</b> arrives at t = 2 s." },
+    { to: 4.5, note: "Instantly, <b>new requests are refused</b> (the load balancer sends them to the new instance). Request A finishes." },
+    { to: 7, note: "Request B, a payment, completes normally. Nothing is cut off halfway." },
+    { to: 9.3, note: "The background worker finishes its current job, then Redis is closed." },
+    { to: 10.5, note: "Finally the <b>DB pool</b> closes (acquired first, released last) and the process exits, well inside the 30 s limit." }
+  ]
+});
+</script>
+</body>
+</html>
