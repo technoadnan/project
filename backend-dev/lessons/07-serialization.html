@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Serialization · Backend Dev</title>
+<meta name="description" content="How a JavaScript object becomes JSON bytes on the wire and a Rust struct on the other side.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="07">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 7</span><span>Video · 21:48</span></div>
+  <h1>Serialization and deserialization</h1>
+  <p class="lead">A JavaScript client and a Rust server don't share a single data type, yet they exchange data all day. They manage it by agreeing on a <strong>common format</strong>. Converting into that format is <strong>serialization</strong>; converting out of it is <strong>deserialization</strong>.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>The problem serialization solves</li><li>The mental model for what happens on the wire</li><li>Text vs binary formats</li><li>JSON's rules and types</li></ul></div>
+</div>
+<h2 id="problem">The problem: two languages, no shared types</h2>
+<p>Your frontend is JavaScript: dynamic, interpreted, loose types. Your server might be Rust: compiled, strictly typed. A JS object means nothing to Rust. So how does <code>{ name: "Ada" }</code> leave a browser and become something a Rust handler can use?</p>
+<p>If you had to design the solution yourself, you'd land on the obvious one: <strong>agree on a standard</strong>. Both sides promise to send data in one shared format and to convert to and from their own types at the edges.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>Moving house: you can't ship a room as it is. You flat-pack the furniture into standard boxes any truck can carry (<strong>serialize</strong>). At the new house you unpack and assemble it to fit <em>that</em> house's layout (<strong>deserialize</strong>). The truck never needs to know what the furniture is.</p></aside>
+
+<h2 id="flow">Watch the round trip</h2>
+<figure class="anim" data-steps id="fig-serde">
+  <figcaption class="anim-title">JavaScript → JSON → Rust → JSON → JavaScript</figcaption>
+  <div class="frame" data-note="The client holds a native <b>JavaScript object</b>. Rust can't read this directly.">
+    <div class="lanes3">
+      <div class="on"><h5>Client · JavaScript</h5><pre>const book = {
+  id: 1,
+  title: "Dune",
+  inStock: true
+};</pre></div>
+      <div><h5>Network</h5><p class="empty">idle</p></div>
+      <div><h5>Server · Rust</h5><p class="empty">waiting…</p></div>
+    </div>
+  </div>
+  <div class="frame" data-note="<b>Serialize:</b> the client converts the object into the shared format, a JSON string, and puts it in the request body.">
+    <div class="lanes3">
+      <div class="on"><h5>Client · JavaScript</h5><pre>JSON.stringify(book)
+→ '{"id":1,"title":"Dune","inStock":true}'</pre></div>
+      <div><h5>Network</h5><p class="empty">idle</p></div>
+      <div><h5>Server · Rust</h5><p class="empty">waiting…</p></div>
+    </div>
+  </div>
+  <div class="frame" data-note="On the wire, lower network layers turn it into packets, frames and finally bits. <b>That's not your concern</b> as a backend engineer: JSON goes in, and JSON comes out the other side.">
+    <div class="lanes3">
+      <div><h5>Client · JavaScript</h5><pre>POST /api/books
+Content-Type: application/json</pre></div>
+      <div class="on"><h5>Network</h5><pre>JSON → packets → frames
+01111011 00100010
+01101001 01100100 …</pre></div>
+      <div><h5>Server · Rust</h5><p class="empty">waiting…</p></div>
+    </div>
+  </div>
+  <div class="frame" data-note="The server receives the same <b>JSON text</b>. It's still just a string.">
+    <div class="lanes3">
+      <div><h5>Client · JavaScript</h5><p class="empty">awaiting response</p></div>
+      <div><h5>Network</h5><p class="empty">delivered</p></div>
+      <div class="on"><h5>Server · Rust</h5><pre>body = r#"{"id":1,"title":"Dune","inStock":true}"#</pre></div>
+    </div>
+  </div>
+  <div class="frame" data-note="<b>Deserialize:</b> the server parses the JSON into its own native type, a strictly typed Rust struct. Now business logic can run.">
+    <div class="lanes3">
+      <div><h5>Client · JavaScript</h5><p class="empty">awaiting response</p></div>
+      <div><h5>Network</h5><p class="empty">idle</p></div>
+      <div class="on"><h5>Server · Rust</h5><pre>struct Book {
+  id: u32,
+  title: String,
+  in_stock: bool,
+}
+let book: Book =
+  serde_json::from_str(&amp;body)?;</pre></div>
+    </div>
+  </div>
+  <div class="frame" data-note="The response repeats the trip in reverse: Rust struct → JSON → network → JSON → <b>JavaScript objects</b> the UI can render.">
+    <div class="lanes3">
+      <div class="on"><h5>Client · JavaScript</h5><pre>const { data } = await res.json();
+data[0].title  // "Dune"</pre></div>
+      <div><h5>Network</h5><pre>{"data":[{"id":1,"title":"Dune",…}]}</pre></div>
+      <div><h5>Server · Rust</h5><pre>Json(BooksResponse { data: books })</pre></div>
+    </div>
+  </div>
+</figure>
+<p>In one sentence: <strong>serialization and deserialization convert data to and from a common format, so machines in different languages and environments can understand it</strong>, whether it's sent over a network or written to storage.</p>
+<aside class="callout analogy"><div class="tag">Analogy: the network layers</div><p>When you post a letter you care about the envelope and the address. Which sorting centre, truck or plane carries it is the postal service's problem. JSON is your envelope; the OSI layers below the application layer are the postal service.</p></aside>
+
+<h2 id="formats">Text formats vs binary formats</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th></th><th>Text-based</th><th>Binary</th></tr></thead>
+  <tbody>
+    <tr><td>Examples</td><td><strong>JSON</strong>, XML, YAML</td><td><strong>Protobuf</strong>, Avro</td></tr>
+    <tr><td>Human-readable?</td><td>Yes: open it and read it</td><td>No: you need tools</td></tr>
+    <tr><td>Size &amp; speed</td><td>Larger, slower to parse</td><td>Compact, faster</td></tr>
+    <tr><td>Typical use</td><td>REST APIs, config files, logs</td><td>gRPC, high-throughput internal services</td></tr>
+  </tbody>
+</table></div>
+<p>For HTTP APIs, JSON is the default, used roughly 80% of the time. It's what the rest of this course assumes, just as it assumes HTTP for transport and Postgres for databases.</p>
+
+<h2 id="json">JSON in two minutes</h2>
+<p>JSON (JavaScript Object Notation) looks like a JS object, but it's language-independent. The rules are short:</p>
+<pre>{                                   <span class="c">// starts and ends with braces</span>
+  <span class="s">"id"</span>: <span class="n">1</span>,                         <span class="c">// keys: always double-quoted strings</span>
+  <span class="s">"title"</span>: <span class="s">"Dune"</span>,                  <span class="c">// string</span>
+  <span class="s">"price"</span>: <span class="n">9.99</span>,                    <span class="c">// number</span>
+  <span class="s">"inStock"</span>: <span class="k">true</span>,                  <span class="c">// boolean</span>
+  <span class="s">"tags"</span>: [<span class="s">"sci-fi"</span>, <span class="s">"classic"</span>],     <span class="c">// array</span>
+  <span class="s">"author"</span>: {                       <span class="c">// nested object, same rules inside</span>
+    <span class="s">"name"</span>: <span class="s">"Frank Herbert"</span>,
+    <span class="s">"country"</span>: <span class="s">"USA"</span>
+  },
+  <span class="s">"sequel"</span>: <span class="k">null</span>                     <span class="c">// null</span>
+}</pre>
+<aside class="callout warn"><div class="tag">Common pitfalls</div><ul>
+  <li><strong>Dates</strong> have no JSON type. They travel as strings, so agree on ISO 8601 with a time zone (<code>"2025-01-31T10:00:00Z"</code>).</li>
+  <li><strong>Missing vs <code>null</code> vs extra fields</strong>: decide how your server treats each, and validate before trusting anything (lesson 9).</li>
+  <li><strong>Big integers</strong> can lose precision in JavaScript. Send large IDs as strings.</li>
+</ul></aside>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>Clients and servers in different languages share no types, so they agree on a common format.</li>
+  <li>Serialize = native → common format; deserialize = common format → native. It happens on both sides, in both directions.</li>
+  <li>Your mental model: JSON in at the application layer, JSON out on the other side. Packets and bits are below your concern.</li>
+  <li>Text formats (JSON) are readable; binary formats (Protobuf) are smaller and faster.</li>
+  <li>JSON: braces, double-quoted string keys, and values that are strings, numbers, booleans, arrays, objects or null.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>In one request–response cycle between a JS client and a Rust server, how many times does (de)serialization happen?</summary><div><p>Four: the client serializes the request, the server deserializes it, the server serializes the response, and the client deserializes it.</p></div></details>
+  <details><summary>Is <code>{name: 'Ada'}</code> valid JSON?</summary><div><p>No. Keys must be double-quoted and strings use double quotes: <code>{"name": "Ada"}</code>.</p></div></details>
+  <details><summary>When might you choose Protobuf over JSON?</summary><div><p>For high-volume service-to-service traffic, where smaller payloads and faster parsing matter more than being able to read the payload by eye.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+
+</body>
+</html>

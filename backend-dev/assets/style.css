@@ -422,3 +422,12 @@ pre mark { background: var(--accent-soft); color: inherit; border-radius: 4px; p
 .presets { display: flex; flex-wrap: wrap; gap: 6px; }
 .presets button { appearance: none; font: 12.5px var(--mono); cursor: pointer; padding: 5px 9px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); }
 .presets button:hover { border-color: var(--accent); color: var(--accent); }
+
+/* three-lane frames (client | wire | server) */
+.lanes3 { display: grid; gap: 10px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.lanes3 > div { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; background: var(--surface); transition: all .3s ease; min-width: 0; }
+.lanes3 > div.on { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.lanes3 h5 { margin: 0 0 6px; font-size: 11.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); }
+.lanes3 pre { margin: 0; font-size: 12px; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.lanes3 .empty { color: var(--faint); font-size: 13px; font-style: italic; }
+@media (max-width: 720px) { .lanes3 { grid-template-columns: minmax(0, 1fr); } }
