@@ -569,3 +569,8 @@ pre mark { background: var(--accent-soft); color: inherit; border-radius: 4px; p
 .pf.worker { background: var(--c-queue); }
 .pf.both { width: 44px; background: linear-gradient(90deg, var(--accent) 50%, color-mix(in srgb, var(--c-queue) 40%, var(--surface)) 50%); }
 @media (max-width: 600px) { .commits { padding: 22px 4px 18px; } .commits::before { left: 12px; right: 12px; } .commits .c b.chip { font-size: 9.5px; padding: 1px 4px; } .pf-row { grid-template-columns: 1fr; gap: 4px; } }
+.hm-step { display: flex; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13.5px; line-height: 1.5; min-width: 0; }
+.hm-step b { flex: 0 0 16px; color: var(--muted); }
+.hm-step span { min-width: 0; overflow-wrap: anywhere; }
+.hm-step.ok b { color: var(--ok); }
+.hm-step.bad b { color: var(--bad); }
