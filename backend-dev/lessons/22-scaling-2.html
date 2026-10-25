@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scaling & performance, part 2 · Backend Dev</title>
+<meta name="description" content="Stateless servers, load balancing, read replicas, sharding, CDNs and the edge, async queues, microservices and serverless.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="22">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 21.2</span><span>Video · 2:18:11</span></div>
+  <h1>Backend scaling & performance engineering, part 2</h1>
+  <p class="lead">Part 1 taught you to measure and to choose between scaling up and out. Part 2 builds the scaled-out system: <strong>stateless</strong> servers behind a <strong>load balancer</strong>, databases spread with <strong>replicas</strong> and <strong>shards</strong>, content pushed to the <strong>edge</strong>, slow work moved to <strong>queues</strong>, and an honest look at <strong>microservices</strong> and <strong>serverless</strong>.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Why horizontal scaling needs stateless servers</li><li>Load-balancing algorithms and health checks</li><li>Read replicas, replication lag and sharding</li><li>CDNs and edge computing: beating the speed of light</li><li>Async processing with queues</li><li>When microservices and serverless are (and aren't) worth it</li></ul></div>
+</div>
+<h2 id="stateless">Stateless servers: the entry ticket</h2>
+<p>Horizontal scaling only works if <strong>any server can handle any request</strong> and give the same answer. Then adding a server adds capacity and losing one loses nothing. That's what <strong>stateless</strong> means: no instance holds data that others can't see.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>At a bank, any teller can help you because your balance lives in the central ledger, not in one teller's drawer. If a teller kept your money in their own drawer, you'd have to queue for <em>that</em> teller, and if they went home, your money would go with them.</p></aside>
+<figure class="anim" id="fig-state">
+  <figcaption class="anim-title">The "randomly logged out" bug</figcaption>
+</figure>
+<div class="table-wrap"><table>
+  <thead><tr><th>State</th><th>✕ Kept on one server</th><th>✓ Kept outside</th></tr></thead>
+  <tbody>
+    <tr><td>Sessions</td><td>In-memory map</td><td>Redis (shared)</td></tr>
+    <tr><td>Uploaded files</td><td>Local disk</td><td>Object storage: S3, R2, MinIO</td></tr>
+    <tr><td>Database</td><td>SQLite file on the server</td><td>Postgres (or RDS) on its own machine</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="load-balancing">Load balancers: who gets the next request?</h2>
+<p>Every request goes to the <strong>load balancer</strong>, which picks a server, forwards the request and relays the response. The interesting part is <em>how</em> it picks:</p>
+<div class="cards">
+  <div class="card"><h4>Round robin</h4><p>A, B, C, A, B, C… Simple and fine when servers are equal and requests are similar. Not when some requests take 250 ms and others 2 s.</p></div>
+  <div class="card"><h4>Weighted round robin</h4><p>A server with twice the RAM and cores gets twice the turns.</p></div>
+  <div class="card"><h4>Least connections</h4><p>Send to the server with the fewest active connections. Heavy requests hold connections open, so new work flows elsewhere. Variants: weighted least connections, <strong>least response time</strong>, and <strong>resource-based</strong> (live CPU/RAM).</p></div>
+</div>
+<figure class="anim" id="fig-lb">
+  <figcaption class="anim-title">Try it: a load balancer in front of three servers</figcaption>
+  <div class="widget">
+    <div class="row">
+      <label>Algorithm <select id="lb-algo"><option value="rr">Round robin</option><option value="wrr">Weighted round robin (A × 2)</option><option value="lc">Least connections</option></select></label>
+      <label><input type="checkbox" id="lb-hc" checked> Health checks (every 1 s)</label>
+    </div>
+    <div class="row">
+      <button type="button" class="act" id="lb-run">▶ Send traffic</button>
+      <button type="button" class="ghost" id="lb-crash">Crash B</button>
+      <button type="button" class="ghost" id="lb-reset">Reset</button>
+    </div>
+    <div class="tiles" id="lb-tiles"></div>
+    <div id="lb-rows"></div>
+    <div class="out" id="lb-log" style="margin-top:8px"></div>
+    <p class="small muted" style="margin:8px 0 0">One request every 150 ms; every third one is heavy (2 s), the rest take 250 ms. Server A has twice the capacity of B and C.</p>
+  </div>
+</figure>
+<p class="small muted">Round robin sends every heavy request to C while big A sits idle. Try weighted and least connections, then crash B with health checks off and on. (Least connections without health checks is the worst case: a dead server always has zero connections, so it attracts everything.)</p>
+<h3>Health checks</h3>
+<p>The load balancer calls something like <code>GET /health</code> on every server every second or so. A non-2xx answer (or no answer) takes the server <strong>out of rotation</strong>; the balancer keeps probing and adds it back once it returns <code>200</code>. Without health checks, round robin keeps feeding a dead server and users see <code>502</code>/<code>503</code> errors.</p>
+
+<h2 id="replicas">Scaling the database: read replicas</h2>
+<p>Once state lives outside your app servers, they scale easily. The database is the stateful part, and it becomes the next bottleneck. Most apps read far more than they write, so the first move is <strong>read replicas</strong>: copies of the primary that serve reads only.</p>
+<figure class="anim" id="fig-replicas">
+  <figcaption class="anim-title">One primary for writes, replicas for reads</figcaption>
+</figure>
+<p>Managed databases (RDS, Cloud SQL) make adding a replica a few clicks. The catch is the one every distributed system pays: <strong>consistency</strong>. Replication takes time; across continents, physics alone adds around 200 ms.</p>
+<figure class="anim" id="fig-lag">
+  <figcaption class="anim-title">Replication lag: "I saved it, but it didn't change!"</figcaption>
+</figure>
+<div class="cards">
+  <div class="card"><h4>Read your own writes</h4><p>For a few seconds after a user writes, route <em>that user's</em> reads (of that data) to the primary.</p></div>
+  <div class="card"><h4>Wait out the lag</h4><p>Track replication lag and only read from a replica that has caught up.</p></div>
+  <div class="card"><h4>Hide it in the UI</h4><p>Show the value the user just typed (optimistic update) instead of re-fetching immediately.</p></div>
+</div>
+
+<h2 id="sharding">Sharding: splitting the table itself</h2>
+<p>Replicas spread <em>reads</em>, but every replica still holds every row. When a table reaches billions of rows (say, orders), <strong>sharding</strong> splits the rows across separate database instances by a <strong>shard key</strong>. More instances means more throughput; fewer rows per shard means faster queries.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>An encyclopedia too big for one book is split into volumes: A–F, G–M, N–Z. You go straight to the right volume, but a question like "every article mentioning Paris" means opening all of them.</p></aside>
+<figure class="anim" id="fig-shard">
+  <figcaption class="anim-title">Orders sharded by date</figcaption>
+</figure>
+<aside class="callout note"><div class="tag">Don't build this yourself</div><p>Distributed databases such as <strong>PlanetScale</strong> (Vitess/MySQL), <strong>Neon</strong> (serverless Postgres), <strong>CockroachDB</strong> and <strong>YugabyteDB</strong> handle sharding, replication and distributed transactions for you. Your job is to understand the concepts well enough to pick replica regions, shard keys and backups in their console.</p></aside>
+
+<h2 id="cdn">CDNs: you can't beat the speed of light</h2>
+<p>Light in fiber travels about <strong>200,000 km/s</strong>. Tokyo to a server in Northern Virginia (us-east-1) and back is roughly 20,000 km, so <strong>~100 ms is the floor</strong> before your code does anything. Add database queries and external calls and a Tokyo user waits 500–800 ms. No optimization of your code can fix distance; only moving closer can.</p>
+<p>A <strong>CDN</strong> (content delivery network) keeps copies of your content in <strong>points of presence (PoPs)</strong> around the world. The Tokyo user is served from Tokyo in 2–3 ms, and your origin never sees the request.</p>
+<figure class="anim" id="fig-cdn">
+  <figcaption class="anim-title">The same request, from the origin vs a nearby PoP</figcaption>
+</figure>
+<div class="cards">
+  <div class="card"><h4>What to cache</h4><p>Static files (JS/CSS bundles, images, fonts, video) and <strong>cacheable API responses</strong>, like a product catalog. Purge by URL or by tag when data changes.</p></div>
+  <div class="card"><h4>Origin offload</h4><p>Every hit served at the edge is a request your servers never handle, often half your traffic or more.</p></div>
+  <div class="card"><h4>DDoS shield</h4><p>A botnet of 20,000 machines can trigger autoscaling and a $50,000-a-day bill. A CDN like Cloudflare absorbs the flood and challenges suspicious clients before they reach you.</p></div>
+</div>
+
+<h2 id="edge">Edge computing: running code at the PoP</h2>
+<p>CDNs can also run <em>your code</em> at the edge (Cloudflare Workers, on lightweight V8 isolates). Good for quick decisions that don't need your database:</p>
+<figure class="anim" id="fig-edge">
+  <figcaption class="anim-title">Reject bad requests before they cross the ocean</figcaption>
+</figure>
+<p>Edge runtimes are deliberately small: limited CPU and memory, no filesystem, no raw TCP connections. They're a front door for authentication checks, localization, routing and validation, not a replacement for your origin.</p>
+
+<h2 id="async">Async processing: respond now, work later</h2>
+<p>Not every task needs to finish before you respond. Move anything the user doesn't need to <em>see</em> immediately to a <strong>queue</strong> (lesson 14): the handler enqueues a job and responds; <strong>workers</strong> process it in the background and scale independently.</p>
+<figure class="anim" id="fig-async">
+  <figcaption class="anim-title">"Invite a teammate": sync vs async</figcaption>
+</figure>
+<div class="cards">
+  <div class="card"><h4>Video upload</h4><p>Respond once the file is stored; thumbnails, HD encodes and subtitles happen in workers.</p></div>
+  <div class="card"><h4>Delete account</h4><p>Cleaning up 8 tables takes ~8 s. Respond in ~100 ms and let a worker do the deletes.</p></div>
+  <div class="card"><h4>Tools</h4><p>Redis (managed, e.g. Upstash) with BullMQ in Node; RabbitMQ or Kafka at larger scale. Adopt it early: it's one of the cheapest ways to cut perceived latency.</p></div>
+</div>
+
+<h2 id="microservices">Microservices: an organizational tool</h2>
+<p>A <strong>monolith</strong> is one deployable unit: auth, orders, payments and notifications are modules in one codebase, running in one process (or many identical copies when scaled out). It's simple to develop, test, refactor and deploy. And you can always scale it horizontally.</p>
+<p>So why split it into <strong>microservices</strong>? Mostly not for machine performance, but for <em>organizational</em> performance.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>A monolith is one restaurant kitchen; microservices are a food court. Each stall hires, cooks and renovates on its own schedule, and the busy stall can add staff without touching the others. But a combo meal now means walking between stalls, and if one stall's register goes down, your order is half-finished.</p></aside>
+<figure class="anim" id="fig-micro">
+  <figcaption class="anim-title">Monolith vs microservices</figcaption>
+</figure>
+<div class="tabs">
+  <div class="tab" data-label="Why split">
+    <ul>
+      <li><strong>Independent deploys.</strong> With hundreds of engineers on one main branch, the payments team's urgent fix waits on the notifications team's half-ready code.</li>
+      <li><strong>Independent scaling.</strong> Order processing is heavy and notifications are light, but a monolith scales as one block.</li>
+      <li><strong>Right tool per job.</strong> The markdown service needs an npm package; image resizing in Go or Rust takes 50 ms instead of 500 ms. One deployable unit means one language.</li>
+    </ul>
+  </div>
+  <div class="tab" data-label="What it costs">
+    <ul>
+      <li><strong>The network.</strong> Function calls become HTTP or gRPC calls: added latency, failures, timeouts and retries to handle.</li>
+      <li><strong>Debugging.</strong> One request crosses the load balancer, gateway, orders, payments and notifications. You need distributed tracing to follow it (lesson 18).</li>
+      <li><strong>Data consistency.</strong> Each service owns its database, so keeping data consistent across them becomes your problem.</li>
+    </ul>
+  </div>
+  <div class="tab" data-label="When to use">
+    <p>Consider it only with clear answers to these:</p>
+    <ul>
+      <li><strong>A large team</strong> (think 100–200+ developers) whose team boundaries can match service boundaries. This one is a prerequisite.</li>
+      <li>Parts that genuinely need to <strong>scale independently</strong>.</li>
+      <li>Parts that genuinely need <strong>different technology</strong>.</li>
+    </ul>
+    <p>Otherwise the costs outweigh the benefits. A startup of 10–30 engineers coordinates fine with a monolith and feature flags.</p>
+  </div>
+</div>
+
+<h2 id="autoscaling">The capacity-planning problem</h2>
+<p>With a traditional server you choose its size (say 2 cores, 4 GB RAM) <em>before</em> traffic arrives, which means predicting user behaviour. Guess too small and a campaign spike makes every request take 3–4 seconds, or crash; users leave. Guess too big and you pay for a 32 GB machine that sits mostly idle. <strong>Autoscaling</strong> adds instances when usage crosses a threshold (e.g. 70% memory) and removes them when it drops, but it has its own catches:</p>
+<ul>
+  <li><strong>It's slow.</strong> A new instance boots an OS, fetches or builds your code and joins the load balancer: seconds to minutes.</li>
+  <li><strong>It's reactive.</strong> It only scales once you're already under load, so a sharp spike hits before help arrives.</li>
+  <li><strong>Its limits are a guess too.</strong> Set the maximum too low and you're capped; too high and a Black Friday or an attack can cost $100,000 in a day.</li>
+  <li><strong>The minimum always costs money</strong>, at zero requests per second too.</li>
+</ul>
+<figure class="anim" id="fig-cap">
+  <figcaption class="anim-title">Try it: one day of traffic with a campaign spike</figcaption>
+  <div class="widget">
+    <div class="row presets" id="cap-modes">
+      <button type="button" data-m="small">Small fixed server</button>
+      <button type="button" data-m="big">Big fixed server</button>
+      <button type="button" data-m="auto">Autoscaling</button>
+      <button type="button" data-m="sls">Serverless</button>
+    </div>
+    <div class="tiles" id="cap-tiles"></div>
+    <div class="out" id="cap-read" style="min-height:1.5em">Hover or touch the chart to read values.</div>
+    <div id="cap-chart"></div>
+    <div class="legend" style="padding:6px 0 0">
+      <span><i style="background:var(--accent);height:3px"></i>traffic</span>
+      <span><i style="background:var(--text);height:3px"></i>capacity</span>
+      <span><i style="background:color-mix(in srgb, var(--bad) 35%, transparent)"></i>overloaded (slow or failing)</span>
+      <span><i style="background:color-mix(in srgb, var(--faint) 35%, transparent)"></i>paid for, unused</span>
+    </div>
+    <p class="small muted" style="margin:6px 0 0">Simplified model, 5-minute steps. Autoscaling: 100 req/s per instance, 2–20 instances, scales out above 70% utilization, in below 40%, and new instances take 10 minutes to boot and join.</p>
+  </div>
+</figure>
+
+<h2 id="serverless">Serverless: pay per request</h2>
+<p>Serverless still runs on servers; you just never see them. You hand the provider (AWS Lambda, Cloudflare Workers, Vercel…) <strong>functions</strong> and the <strong>events</strong> that trigger them. No OS, no machine size, no capacity planning. You pay only for the milliseconds your code actually runs.</p>
+<figure class="anim" id="fig-sls">
+  <figcaption class="anim-title">How a serverless request runs</figcaption>
+</figure>
+<p>The price of that model is the <strong>cold start</strong>: when no instance is warm, the provider must create one before your code runs.</p>
+<figure class="anim" id="fig-cold">
+  <figcaption class="anim-title">Cold vs warm request (illustrative numbers)</figcaption>
+</figure>
+<div class="split">
+  <div class="card"><h4>Fighting cold starts</h4><p><strong>Keep-warm pings:</strong> ping your own functions so an instance stays ready; overdo it and you're paying 24/7 again. <strong>Faster sandboxes:</strong> Firecracker microVMs (AWS Lambda) and V8 isolates (Cloudflare Workers start in about a millisecond). <strong>Faster runtimes:</strong> JavaScript, Python and small compiled binaries start much faster than a JVM. Cold starts shrink, but never reach zero.</p></div>
+  <div class="card"><h4>Other limits</h4><p><strong>Execution time:</strong> a Lambda function runs for at most 15 minutes. <strong>Statelessness:</strong> instances come and go, so long-lived database connections and WebSockets need rethinking, often with a serverless database or a pooler. <strong>Price per unit:</strong> each millisecond of compute costs more than on a server you keep busy.</p></div>
+</div>
+<div class="split">
+  <div class="card"><h4>✓ Good fits</h4><p>Occasional heavy jobs: image resizing, video processing. Event-driven work: a message lands in a queue, a file is uploaded, a database row changes. Spiky, unpredictable traffic.</p></div>
+  <div class="card"><h4>✕ Poor fits</h4><p>Latency-critical paths (payments, banking), long-running requests and WebSocket connections, workloads that hold many database connections, and steady, predictable traffic, which most SaaS apps have.</p></div>
+</div>
+<p>Serverless is a powerful tool for specific jobs, not a universal replacement for servers.</p>
+
+<h2 id="rules">Five rules of thumb</h2>
+<div class="cards">
+  <div class="card"><div class="k">1</div><h4>Start with the problem</h4><p>Every technique here is a solution. Measure first (logs, metrics, traces, load tests; Prometheus + Grafana or New Relic) and know <em>exactly</em> what's slow and why before you fix anything. Fixing the wrong bottleneck is worse than doing nothing: it feels like progress.</p></div>
+  <div class="card"><div class="k">2</div><h4>Prefer simple</h4><p>A big server before a fleet. An index before a Redis layer. A monolith before microservices; Kubernetes only when you must. Every component is something new to fail, monitor and operate.</p></div>
+  <div class="card"><div class="k">3</div><h4>Scale for the problems you have</h4><p>Build for today's load plus reasonable headroom, not a million users on day one. Big-company engineering blogs solve their problems, not necessarily yours.</p></div>
+  <div class="card"><div class="k">4</div><h4>Observe from day one</h4><p>The one exception to "keep it simple": production-grade logs, metrics and traces early. They warn you before users do.</p></div>
+  <div class="card"><div class="k">5</div><h4>It's a mindset</h4><p>You learn scaling by watching your own systems struggle and fixing what the numbers point at. The goal isn't to predict every problem but to diagnose and recover quickly when one appears.</p></div>
+</div>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>Scale out only after making servers stateless: sessions in Redis, files in object storage, data in a shared database.</li>
+  <li>Pick a balancing algorithm that fits your traffic (least connections handles uneven requests well) and always use health checks.</li>
+  <li>Read replicas spread reads but bring replication lag; route a user's reads to the primary right after they write.</li>
+  <li>Sharding splits big tables across machines; the shard key is the hard decision. Prefer a managed distributed database.</li>
+  <li>Distance costs ~100 ms per ocean round trip. CDNs bring content close; edge functions bring small decisions close.</li>
+  <li>Queue anything the user doesn't need to wait for.</li>
+  <li>Microservices solve team-scale problems at the price of network, debugging and consistency complexity.</li>
+  <li>Serverless removes capacity planning but adds cold starts, time limits and statelessness. Great for spiky and event-driven work.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>After adding a second server, users get logged out at random. What's wrong?</summary><div><p>Sessions live in each server's memory. When the load balancer sends a request to the other server, it doesn't know the session. Move sessions to a shared store such as Redis (or use self-contained tokens).</p></div></details>
+  <details><summary>A user changes their display name, the page reloads, and the old name is back. A minute later it's correct. Why?</summary><div><p>Replication lag: the write went to the primary, the reload read from a replica that hadn't caught up yet. Route that user's reads to the primary briefly after a write, or update the UI optimistically.</p></div></details>
+  <details><summary>Some API calls take 2 s and most take 200 ms. Why might round robin overload one server?</summary><div><p>It counts turns, not work. Heavy requests can pile up on one server by chance or by pattern. Least connections (or least response time) sends new work to whoever is least busy.</p></div></details>
+  <details><summary>Your API is in Virginia and Japanese users complain it's slow, even though server time is 20 ms. What helps?</summary><div><p>The latency is mostly distance (~100+ ms per round trip). Cache what you can at a CDN, run quick checks at the edge, or deploy servers (and read replicas) in Asia.</p></div></details>
+  <details><summary>A 15-person startup wants microservices "to scale". What would you suggest?</summary><div><p>Keep the monolith and scale it horizontally. Microservices mainly solve large-team coordination; for a small team they add network calls, distributed debugging and data-consistency work without a matching benefit.</p></div></details>
+  <details><summary>Which workload suits serverless best: a busy payments API, a nightly image-thumbnail job, or a chat server with WebSockets?</summary><div><p>The thumbnail job: occasional, event-driven and tolerant of cold starts. Payments are latency-critical; WebSockets need long-lived connections.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.flow("#fig-state", {
+  w: 720, h: 280,
+  nodes: {
+    c: { x: 70, y: 140, label: "User", sub: "", kind: "client", w: 100 },
+    lb: { x: 225, y: 140, label: "Load balancer", sub: "", kind: "net", w: 130 },
+    a: { x: 420, y: 70, label: "Server A", sub: "", kind: "server", w: 150 },
+    b: { x: 420, y: 210, label: "Server B", sub: "", kind: "server", w: 150 },
+    r: { x: 630, y: 90, label: "Redis", sub: "sessions", kind: "cache", shape: "cyl", w: 120, h: 64 },
+    s3: { x: 630, y: 215, label: "S3 / R2", sub: "files", kind: "ext", shape: "cyl", w: 120, h: 64 }
+  },
+  edges: [["c", "lb"], ["lb", "a"], ["lb", "b"], ["a", "r"], ["b", "r"], ["b", "s3"]],
+  steps: [
+    { path: ["c", "lb", "a"], dim: ["r", "s3"], set: { a: "session #42 in memory" }, note: "You log in. The request lands on server A, which keeps your session in its own memory." },
+    { path: ["c", "lb", "b"], dim: ["r", "s3"], bad: ["b"], set: { a: "session #42 in memory", b: "401: who are you?" }, note: "The next request goes to B. B has never seen session #42, so it answers <b>401</b>. To the user it looks like a random logout." },
+    { path: ["a", "r"], fresh: true, hl: ["r"], dim: ["s3"], set: { r: "session #42" }, note: "Fix: store sessions in a shared store such as <b>Redis</b>." },
+    { path: ["c", "lb", "b", "r"], tone: "ok", ok: ["b", "r"], dim: ["s3"], set: { r: "session #42", b: "found #42 ✓" }, note: "Now any server can handle any request: B looks the session up and serves you." },
+    { path: ["b", "s3"], tone: "ok", ok: ["s3"], set: { r: "session #42", s3: "avatar.png" }, note: "Same rule for files: uploads go to <b>object storage</b>, not one server's disk." }
+  ]
+});
+
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var S = [{ id: "A", spec: "8 GB · 4 cores", cap: 6 }, { id: "B", spec: "4 GB · 2 cores", cap: 3 }, { id: "C", spec: "4 GB · 2 cores", cap: 3 }];
+  var WRR = [0, 0, 1, 2];
+  var algo = $("lb-algo"), hc = $("lb-hc"), runBtn = $("lb-run"), crashBtn = $("lb-crash");
+  var t, k, timer, sent, failed, rr, recent;
+  function reset() {
+    clearInterval(timer); timer = null; runBtn.textContent = "▶ Send traffic";
+    t = 0; k = 0; sent = 0; failed = 0; rr = 0; recent = [];
+    S.forEach(function (s) { s.jobs = []; s.alive = true; s.inLB = true; s.done = 0; s.peak = 0; });
+    crashBtn.textContent = "Crash B";
+    render();
+  }
+  function pick() {
+    var pool = S.filter(function (s) { return s.inLB; }), s;
+    if (!pool.length) return null;
+    if (algo.value === "rr") { do { s = S[rr++ % 3]; } while (!s.inLB); return s; }
+    if (algo.value === "wrr") { do { s = S[WRR[rr++ % 4]]; } while (!s.inLB); return s; }
+    return pool.reduce(function (m, x) { return x.jobs.length < m.jobs.length ? x : m; });
+  }
+  function tick() {
+    t += 50;
+    S.forEach(function (s) {
+      var before = s.jobs.length;
+      s.jobs = s.jobs.filter(function (end) { return end > t; });
+      s.done += before - s.jobs.length;
+    });
+    if (t % 1000 === 0 && hc.checked) S.forEach(function (s) { s.inLB = s.alive; });
+    if (t % 150 === 0) {
+      var heavy = k % 3 === 2, target = pick(), ok = target && target.alive;
+      sent++;
+      if (ok) { target.jobs.push(t + (heavy ? 2000 : 250)); target.peak = Math.max(target.peak, target.jobs.length / target.cap); }
+      else failed++;
+      recent.unshift('<span class="chip ' + (ok ? (heavy ? "warn" : "") : "bad") + '">#' + (k + 1) + " " + (heavy ? "2 s" : "0.25 s") + " → " + (target ? target.id : "none") + (ok ? "" : " · 502") + "</span>");
+      recent.length = Math.min(recent.length, 6);
+      k++;
+    }
+    if (sent >= 400) { clearInterval(timer); timer = null; runBtn.textContent = "▶ Send traffic"; }
+    render();
+  }
+  function render() {
+    var served = S.reduce(function (a, s) { return a + s.done; }, 0);
+    var busiest = S.reduce(function (m, s) { return Math.max(m, s.peak); }, 0);
+    $("lb-tiles").innerHTML = '<div class="tile"><small>Sent</small><b>' + sent + '</b></div><div class="tile ok"><small>Served</small><b>' + served + '</b></div><div class="tile ' + (failed ? "bad" : "") + '"><small>Failed (502)</small><b>' + failed + '</b></div><div class="tile ' + (busiest > 1 ? "bad" : busiest > 0.75 ? "warn" : "") + '"><small>Worst peak load</small><b>' + Math.round(busiest * 100) + "%</b></div>";
+    $("lb-rows").innerHTML = S.map(function (s) {
+      var load = s.jobs.length / s.cap, cls = !s.alive || load > 1 ? "bad" : load > 0.75 ? "warn" : "ok";
+      var status = !s.alive ? (s.inLB ? '<span class="chip bad">down · still in rotation</span>' : '<span class="chip warn">down · removed</span>')
+        : (s.inLB ? '<span class="chip ok">healthy</span>' : '<span class="chip warn">up · awaiting check</span>');
+      return '<div class="lb-row"><div><b>Server ' + s.id + "</b><small>" + s.spec + '</small></div><div><div class="meter ' + cls + '"><i style="transition:width .15s;width:' + Math.min(100, load * 100) + '%"></i></div><small>' + s.jobs.length + " active / " + s.cap + " comfortable · " + s.done + " served · peak " + Math.round(s.peak * 100) + "%</small></div><div>" + status + "</div></div>";
+    }).join("");
+    $("lb-log").innerHTML = recent.length ? "Latest: " + recent.join(" ") : "Press <b>Send traffic</b> to start.";
+  }
+  runBtn.addEventListener("click", function () {
+    if (timer) { clearInterval(timer); timer = null; runBtn.textContent = "▶ Send traffic"; return; }
+    if (sent >= 400) reset();
+    timer = setInterval(tick, 50); runBtn.textContent = "❚❚ Pause";
+  });
+  crashBtn.addEventListener("click", function () {
+    var b = S[1];
+    if (b.alive) { b.alive = false; failed += b.jobs.length; b.jobs = []; crashBtn.textContent = "Restart B"; }
+    else { b.alive = true; crashBtn.textContent = "Crash B"; }
+    render();
+  });
+  hc.addEventListener("change", function () { if (!hc.checked) S.forEach(function (s) { s.inLB = true; }); render(); });
+  algo.addEventListener("change", function () { var running = !!timer; reset(); if (running) runBtn.click(); });
+  $("lb-reset").addEventListener("click", reset);
+  reset();
+})();
+
+BD.flow("#fig-replicas", {
+  w: 720, h: 300,
+  nodes: {
+    u: { x: 80, y: 150, label: "Users", sub: "India", kind: "client", w: 110 },
+    app: { x: 260, y: 150, label: "App servers", sub: "", kind: "server", w: 140 },
+    p: { x: 600, y: 55, label: "Primary", sub: "US · reads + writes", kind: "db", shape: "cyl", w: 170, h: 70 },
+    ri: { x: 470, y: 245, label: "Replica", sub: "India · read-only", kind: "db", shape: "cyl", w: 150, h: 64 },
+    rj: { x: 640, y: 245, label: "Replica", sub: "Japan · read-only", kind: "db", shape: "cyl", w: 150, h: 64 }
+  },
+  edges: [["u", "app"], ["app", "p"], ["app", "ri"], ["p", "ri", { dashed: true }], ["p", "rj", { dashed: true }]],
+  steps: [
+    { path: ["app", "p"], hl: ["p"], packet: "UPDATE", note: "Every <b>write</b> goes to the single primary." },
+    { path: [["p", "ri"], ["p", "rj"]], packet: "WAL", note: "The primary streams its changes to the replicas, asynchronously." },
+    { path: ["u", "app", "ri"], tone: "ok", ok: ["ri"], packet: "SELECT", note: "<b>Reads</b>, often 70–90% of traffic, go to a nearby replica: less load on the primary and lower latency for far-away users." }
+  ]
+});
+
+BD.seq("#fig-lag", {
+  actors: ["User", "App", "Primary (US)", "Replica (India)"],
+  colW: 150, rowH: 40, pad: 70,
+  steps: [
+    { from: 0, to: 1, label: "PATCH /me {name: \"Priya S.\"}", note: "The user renames themself." },
+    { from: 1, to: 2, label: "UPDATE users SET name…", note: "The write goes to the primary in the US…" },
+    { from: 2, to: 1, label: "OK", ret: true, note: "…which commits it." },
+    { from: 1, to: 0, label: "200 OK", ret: true, tone: "ok", note: "The app confirms, and the page reloads straight away." },
+    { from: 0, to: 1, label: "GET /me", note: "The reload is a read…" },
+    { from: 1, to: 3, label: "SELECT … FROM users", note: "…so it goes to the nearby replica." },
+    { from: 3, to: 1, label: "name: \"Priya\" (old!)", ret: true, tone: "bad", note: "The replica hasn't received the change yet. The user sees their <b>old name</b> and thinks the save failed." },
+    { from: 2, to: 3, label: "replicated (~200 ms later)", ret: true, note: "Moments later the change arrives. The data is <b>eventually</b> consistent, but the user already noticed." },
+    { from: 1, to: 2, label: "read-your-writes: SELECT on primary", tone: "ok", note: "Fix: for a short window after a user writes, send that user's reads to the primary." }
+  ]
+});
+
+BD.flow("#fig-shard", {
+  w: 720, h: 270,
+  nodes: {
+    app: { x: 80, y: 135, label: "App", sub: "", kind: "server", w: 110 },
+    r: { x: 290, y: 135, label: "Shard router", sub: "key: order date", kind: "net", w: 160 },
+    s1: { x: 580, y: 65, label: "Shard 1", sub: "Jan – Jun orders", kind: "db", shape: "cyl", w: 170, h: 66 },
+    s2: { x: 580, y: 205, label: "Shard 2", sub: "Jul – Dec orders", kind: "db", shape: "cyl", w: 170, h: 66 }
+  },
+  edges: [["app", "r"], ["r", "s1"], ["r", "s2"]],
+  steps: [
+    { path: ["app", "r", "s1"], hl: ["s1"], packet: "Mar 14", set: { r: "Mar 14 → shard 1" }, note: "The router reads the <b>shard key</b> and sends the query to the one shard holding March orders. Each shard holds only part of the rows." },
+    { path: ["app", "r", "s2"], hl: ["s2"], packet: "Oct 2", set: { r: "Oct 2 → shard 2" }, note: "October lives on shard 2. Two machines now share the CPU, memory and disk work." },
+    { path: [["r", "s1"], ["r", "s2"]], warn: ["r"], set: { r: "no key → ask all" }, note: "A query <em>without</em> the shard key (\"all orders for customer 7\") must ask <b>every</b> shard and merge the results." },
+    { path: ["r", "s2"], bad: ["s2"], set: { r: "today → shard 2", s2: "every new order lands here" }, note: "And date keys have a trap: all <em>new</em> orders hit the shard holding the current months, a <b>hot shard</b>. Choosing the shard key is the hard part." }
+  ]
+});
+
+BD.timeline("#fig-cdn", {
+  lanes: ["From origin (Virginia)", "From Tokyo PoP · ~3 ms"],
+  total: 500, unit: " ms", ticks: 5, labelW: 170,
+  legend: [{ k: "net", label: "network" }, { k: "server", label: "your code" }, { k: "db", label: "database" }, { k: "io", label: "external API" }],
+  segs: [
+    { lane: 0, s: 0, d: 75, k: "net", t: "→ 75 ms" },
+    { lane: 0, s: 75, d: 15, k: "server" },
+    { lane: 0, s: 90, d: 80, k: "db", t: "DB 80 ms" },
+    { lane: 0, s: 170, d: 200, k: "io", t: "external API 200 ms" },
+    { lane: 0, s: 370, d: 20, k: "server" },
+    { lane: 0, s: 390, d: 75, k: "net", t: "← 75 ms" },
+    { lane: 1, s: 0, d: 3, k: "net" }
+  ],
+  steps: [
+    { to: 10, note: "A user in Tokyo requests the product catalog. The nearby PoP already has a cached copy and answers in about <b>3 ms</b>." },
+    { to: 470, note: "Without the CDN, the request crosses the Pacific and the US (~75 ms each way over real cables), then waits on the database and an external API: <b>~465 ms</b>, and the origin did all the work." }
+  ]
+});
+
+BD.flow("#fig-edge", {
+  w: 720, h: 230,
+  nodes: {
+    u: { x: 80, y: 115, label: "User", sub: "Tokyo", kind: "client", w: 110 },
+    e: { x: 330, y: 115, label: "Edge worker", sub: "Tokyo PoP", kind: "net", w: 160 },
+    o: { x: 610, y: 115, label: "Origin", sub: "Virginia", kind: "server", w: 140 }
+  },
+  edges: [["u", "e", { label: "~3 ms" }], ["e", "o", { label: "~75 ms" }]],
+  steps: [
+    { path: ["u", "e"], tone: "bad", bad: ["e"], dim: ["o"], packet: "expired JWT", set: { e: "401 in ~3 ms" }, note: "A request with an expired token is rejected <b>at the edge</b> in a few milliseconds. The origin never spends a cycle on it." },
+    { path: ["u", "e", "o"], tone: "ok", ok: ["e"], packet: "valid", fresh: true, set: { e: "token ✓ · lang: ja" }, note: "A valid request continues to the origin, already tagged with the user's language and region for localization." }
+  ]
+});
+
+BD.timeline("#fig-async", {
+  lanes: ["Sync: response", "Async: response", "Async: worker"],
+  total: 450, unit: " ms", ticks: 5, labelW: 140,
+  legend: [{ k: "db", label: "DB insert" }, { k: "io", label: "email API" }, { k: "queue", label: "enqueue" }],
+  segs: [
+    { lane: 0, s: 0, d: 100, k: "db", t: "insert 100 ms" },
+    { lane: 0, s: 100, d: 300, k: "io", t: "send email 300 ms" },
+    { lane: 1, s: 0, d: 100, k: "db", t: "insert 100 ms" },
+    { lane: 1, s: 100, d: 4, k: "queue" },
+    { lane: 2, s: 110, d: 300, k: "io", t: "send email (nobody waits)" }
+  ],
+  steps: [
+    { to: 105, note: "Async: insert the invite, push a \"send email\" job onto the queue and respond. The user is done in <b>~100 ms</b>." },
+    { to: 410, note: "Sync: the user also waits for the email provider: <b>400 ms</b>. In the async version a worker sends the email in the background, and retries if it fails." }
+  ]
+});
+
+BD.flow("#fig-micro", {
+  w: 720, h: 300,
+  nodes: {
+    m: { x: 110, y: 150, label: "Monolith", sub: "auth · orders · payments · …", kind: "server", w: 190, h: 70 },
+    gw: { x: 340, y: 150, label: "API gateway", sub: "", kind: "net", w: 130 },
+    o: { x: 580, y: 55, label: "Orders", sub: "Node", kind: "server", w: 150 },
+    p: { x: 580, y: 150, label: "Payments", sub: "Go", kind: "server", w: 150 },
+    n: { x: 580, y: 245, label: "Notifications", sub: "Node", kind: "server", w: 150 }
+  },
+  edges: [["gw", "o"], ["gw", "p"], ["gw", "n"], ["o", "p"]],
+  steps: [
+    { hl: ["m"], dim: ["gw", "o", "p", "n"], set: { m: "× 3 copies of everything" }, note: "A <b>monolith</b>: every module in one deployable. Payments needs more power, so you run three copies of <em>everything</em>." },
+    { path: ["gw", "o"], fresh: true, dim: ["m"], note: "<b>Microservices</b>: each module becomes its own service, owned by its own team…" },
+    { path: [["gw", "p"], ["gw", "n"]], dim: ["m"], ok: ["p", "n"], set: { p: "Go · × 4 instances", n: "Node · × 1 instance" }, note: "…deployed on its own schedule, written in the language that suits it, and scaled independently." },
+    { path: ["gw", "o", "p"], dim: ["m"], bad: ["p"], warn: ["o"], set: { p: "slow… timeout?", o: "waiting on payments", n: "Node · × 1 instance" }, note: "But a function call is now a <b>network call</b>: latency, timeouts, retries and partial failures, plus tracing across services and data spread over several databases." }
+  ]
+});
+
+(function () {
+  var N = 288, traffic = [];
+  for (var i = 0; i < N; i++) {
+    var h = i / 12, base = 70, spike = 0;
+    if (h > 6 && h < 23.5) base += 430 * Math.pow(Math.sin(Math.PI * (h - 6) / 17.5), 2);
+    if (h >= 19 && h < 19.25) spike = 1150 * (h - 19) / 0.25;
+    else if (h >= 19.25) spike = 1150 * Math.exp(-(h - 19.25) / 0.5);
+    traffic.push(Math.max(20, base + spike + 22 * Math.sin(i * 1.7) + 14 * Math.sin(i * 0.37)));
+  }
+  function capacity(mode) {
+    if (mode === "small") return traffic.map(function () { return 600; });
+    if (mode === "big") return traffic.map(function () { return 2000; });
+    if (mode === "sls") return traffic.slice();
+    var per = 100, min = 2, max = 20, inst = min, pend = [], low = 0, out = [];
+    for (var i = 0; i < N; i++) {
+      pend = pend.filter(function (p) { if (p[0] <= i) { inst += p[1]; return false; } return true; });
+      out.push(inst * per);
+      var u = traffic[i] / (inst * per), coming = pend.reduce(function (a, p) { return a + p[1]; }, 0);
+      var want = Math.max(min, Math.min(max, Math.ceil(traffic[i] / (per * 0.6))));
+      if (u > 0.7) { low = 0; if (want - inst - coming > 0) pend.push([i + 2, want - inst - coming]); }
+      else if (u < 0.4 && !coming) { if (++low >= 2) { inst = want; low = 0; } }
+      else low = 0;
+    }
+    return out;
+  }
+  var W = 680, H = 250, L = 58, R = 12, T = 12, B = 30, maxY = 2200;
+  var dx, sx = function (i) { return L + i * dx; }, sy = function (v) { return T + (1 - Math.min(v, maxY) / maxY) * (H - T - B); };
+  var host = document.getElementById("cap-chart"), read = document.getElementById("cap-read"), tiles = document.getElementById("cap-tiles");
+  var mode = "small", cap = [];
+  function fmtT(i) { var m = i * 5; return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0"); }
+  function draw() {
+    W = Math.max(340, Math.min(680, host.clientWidth || 680)); dx = (W - L - R) / N;
+    cap = capacity(mode);
+    var grid = "";
+    [0, 500, 1000, 1500, 2000].forEach(function (y) { grid += '<line class="chart-grid" x1="' + L + '" x2="' + (W - R) + '" y1="' + sy(y) + '" y2="' + sy(y) + '"/><text class="chart-axis" x="' + (L - 8) + '" y="' + (sy(y) + 4) + '" text-anchor="end">' + y.toLocaleString("en-US") + "</text>"; });
+    [0, 6, 12, 18, 24].forEach(function (hh) { grid += '<text class="chart-axis" x="' + sx(hh * 12) + '" y="' + (H - 10) + '" text-anchor="' + (hh === 0 ? "start" : hh === 24 ? "end" : "middle") + '">' + String(hh).padStart(2, "0") + ":00</text>"; });
+    grid += '<text class="chart-axis" x="' + L + '" y="' + (T - 2) + '" text-anchor="start" dy="0">req/s</text>';
+    var over = 0, idle = 0, sumT = 0, sumC = 0, tl = "", cl = "", base = H - B;
+    for (var i = 0; i < N; i++) {
+      var tv = traffic[i], cv = cap[i];
+      sumT += tv; sumC += cv;
+      if (tv > cv) over += tv - cv; else idle += cv - tv;
+      tl += "L" + (sx(i) + dx / 2).toFixed(1) + "," + sy(tv).toFixed(1);
+      cl += (i ? "L" + sx(i).toFixed(1) + "," + sy(cap[i - 1]).toFixed(1) : "") + "L" + sx(i).toFixed(1) + "," + sy(cv).toFixed(1);
+    }
+    cl += "L" + sx(N).toFixed(1) + "," + sy(cap[N - 1]).toFixed(1);
+    var tEnds = "M" + L + "," + sy(traffic[0]).toFixed(1) + tl + "L" + (W - R) + "," + sy(traffic[N - 1]).toFixed(1);
+    var cEnds = "M" + cl.slice(1);
+    var defs = '<defs><clipPath id="cap-above-c"><path d="M' + L + "," + T + "L" + cl.slice(1) + "L" + (W - R) + "," + T + 'Z"/></clipPath>' +
+      '<clipPath id="cap-above-t"><path d="M' + L + "," + T + "L" + tEnds.slice(1) + "L" + (W - R) + "," + T + 'Z"/></clipPath></defs>';
+    var areas = '<path d="' + tEnds + "L" + (W - R) + "," + base + "L" + L + "," + base + 'Z" fill="var(--bad)" opacity=".35" clip-path="url(#cap-above-c)"/>' +
+      '<path d="' + cEnds + "L" + (W - R) + "," + base + "L" + L + "," + base + 'Z" fill="var(--faint)" opacity=".3" clip-path="url(#cap-above-t)"/>';
+    host.innerHTML = '<svg viewBox="0 0 ' + W + " " + H + '" class="fit" role="img" aria-label="Traffic over one day compared with provisioned capacity">' + defs + grid + areas +
+      '<path d="' + cEnds + '" fill="none" stroke="var(--text)" stroke-width="2" stroke-linejoin="round"/><path class="chart-line" d="M' + tl.slice(1) + '" stroke-linejoin="round"/>' +
+      '<line id="cap-guide" class="chart-grid" y1="' + T + '" y2="' + (H - B) + '" stroke-dasharray="4 4" visibility="hidden"/><rect id="cap-hit" x="' + L + '" y="' + T + '" width="' + (W - L - R) + '" height="' + (H - T - B) + '" fill="transparent"/></svg>';
+    var overPct = over / sumT * 100, idlePct = sumC ? idle / sumC * 100 : 0;
+    tiles.innerHTML = '<div class="tile ' + (overPct > 0.5 ? "bad" : "ok") + '"><small>Requests slow or failing</small><b>' + (overPct < 0.05 ? "0" : overPct.toFixed(1)) + '%</b></div><div class="tile ' + (idlePct > 50 ? "bad" : idlePct > 25 ? "warn" : "ok") + '"><small>Paid capacity unused</small><b>' + Math.round(idlePct) + '%</b></div><div class="tile"><small>Capacity paid vs used</small><b>' + (sumC / sumT).toFixed(1) + "×</b></div>" +
+      (mode === "sls" ? '<div class="tile warn"><small>Catch</small><b style="font-size:15px">cold starts, higher unit price</b></div>' : "");
+    Array.prototype.forEach.call(document.querySelectorAll("#cap-modes button"), function (b) { b.style.borderColor = b.getAttribute("data-m") === mode ? "var(--accent)" : ""; b.style.color = b.getAttribute("data-m") === mode ? "var(--accent)" : ""; });
+    var hit = host.querySelector("#cap-hit"), guide = host.querySelector("#cap-guide");
+    function move(ev) {
+      var r = hit.getBoundingClientRect(), x = (ev.clientX - r.left) / r.width * (W - L - R);
+      var i = Math.max(0, Math.min(N - 1, Math.floor(x / dx)));
+      guide.setAttribute("x1", sx(i) + dx / 2); guide.setAttribute("x2", sx(i) + dx / 2); guide.setAttribute("visibility", "visible");
+      var d = traffic[i] - cap[i];
+      read.innerHTML = "<b>" + fmtT(i) + "</b> · traffic " + Math.round(traffic[i]).toLocaleString("en-US") + " req/s · capacity " + Math.round(cap[i]).toLocaleString("en-US") + " req/s" + (d > 1 ? ' · <span class="chip bad">overloaded</span>' : "");
+    }
+    hit.addEventListener("pointermove", move);
+    hit.addEventListener("pointerdown", move);
+    hit.addEventListener("pointerleave", function () { guide.setAttribute("visibility", "hidden"); });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("#cap-modes button"), function (b) {
+    b.addEventListener("click", function () { mode = b.getAttribute("data-m"); draw(); });
+  });
+  var lastW = host.clientWidth;
+  window.addEventListener("resize", function () { if (Math.abs(host.clientWidth - lastW) > 40) { lastW = host.clientWidth; draw(); } });
+  draw();
+})();
+
+BD.flow("#fig-sls", {
+  w: 720, h: 300,
+  nodes: {
+    c: { x: 80, y: 150, label: "Client", sub: "", kind: "client", w: 110 },
+    gw: { x: 290, y: 150, label: "API gateway", sub: "route → function", kind: "net", w: 160 },
+    f1: { x: 560, y: 55, label: "resize()", sub: "", kind: "server", w: 170 },
+    f2: { x: 560, y: 150, label: "resize()", sub: "", kind: "server", w: 170 },
+    f3: { x: 560, y: 245, label: "resize()", sub: "", kind: "server", w: 170 }
+  },
+  edges: [["c", "gw"], ["gw", "f1"], ["gw", "f2"], ["gw", "f3"]],
+  steps: [
+    { path: ["c", "gw"], dim: ["f1", "f2", "f3"], packet: "POST /resize", set: { gw: "/resize → resize()" }, note: "An <b>API gateway</b> receives the HTTP request and maps the route (the event) to your function. No machine is running your code yet." },
+    { path: ["gw", "f1"], warn: ["f1"], dim: ["f2", "f3"], set: { f1: "cold start: booting…" }, note: "The provider creates an instance, loads your code and runs it: a <b>cold start</b>." },
+    { path: ["gw", "f1"], tone: "ok", ok: ["f1"], dim: ["f2", "f3"], set: { f1: "warm · billed per ms" }, note: "It responds. You're billed only for the milliseconds of CPU and memory used. The instance stays warm for a little while in case another request comes." },
+    { path: [["gw", "f1"], ["gw", "f2"], ["gw", "f3"]], ok: ["f1", "f2", "f3"], set: { f1: "warm", f2: "new instance", f3: "new instance" }, note: "A burst arrives: the provider simply runs more instances in parallel. No capacity planning on your side." },
+    { dim: ["f1", "f2", "f3"], fresh: true, set: { f1: "gone", f2: "gone", f3: "gone" }, note: "Traffic stops: instances are torn down and the bill drops to zero. The next request pays a cold start again." }
+  ]
+});
+
+BD.timeline("#fig-cold", {
+  lanes: ["Cold request", "Warm request"],
+  total: 600, unit: " ms", ticks: 6, labelW: 120,
+  legend: [{ k: "wait", label: "create sandbox" }, { k: "io", label: "start runtime + init code" }, { k: "cpu", label: "your handler" }],
+  segs: [
+    { lane: 0, s: 0, d: 150, k: "wait", t: "boot microVM" },
+    { lane: 0, s: 150, d: 170, k: "io", t: "start runtime" },
+    { lane: 0, s: 320, d: 180, k: "io", t: "load code, connect DB" },
+    { lane: 0, s: 500, d: 60, k: "cpu", t: "handler" },
+    { lane: 1, s: 0, d: 60, k: "cpu", t: "handler" }
+  ],
+  steps: [
+    { to: 62, note: "Two identical requests. The warm instance runs your handler straight away: <b>60 ms</b>." },
+    { to: 565, note: "The cold one first needs a sandbox, a language runtime and your initialization code: <b>~560 ms</b> here. Real cold starts range from a few ms (V8 isolates) to seconds (large JVM apps)." }
+  ]
+});
+</script>
+</body>
+</html>

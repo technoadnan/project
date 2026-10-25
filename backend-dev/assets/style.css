@@ -492,3 +492,8 @@ pre mark { background: var(--accent-soft); color: inherit; border-radius: 4px; p
 .flame .row { display: flex; gap: 2px; }
 .flame span { display: block; padding: 5px 6px; border-radius: 4px; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .widget svg { display: block; width: 100%; height: auto; }
+.lb-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 9px 0; border-top: 1px solid var(--border); }
+.lb-row b { display: block; font-size: 14px; }
+.lb-row small { display: block; font-size: 12px; color: var(--muted); margin-top: 3px; }
+@media (max-width: 600px) { .lb-row { grid-template-columns: minmax(0, 1fr); gap: 4px; } }
+@media (max-width: 600px) { .lb-row { grid-template-columns: minmax(0, 1fr) auto; } .lb-row > div:nth-child(2) { grid-column: 1 / -1; order: 3; } }
