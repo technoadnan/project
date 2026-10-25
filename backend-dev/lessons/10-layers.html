@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Controllers, services & middleware · Backend Dev</title>
+<meta name="description" content="The layers every request passes through, and what each one is responsible for.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="10">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 10</span><span>Video · 59:57</span></div>
+  <h1>Controllers, services, repositories, middleware & request context</h1>
+  <p class="lead">Between "request arrives" and "response leaves", a production server passes the request through a chain of pieces with clear jobs. <strong>Middleware</strong> handles what every request needs, the <strong>controller</strong> speaks HTTP, the <strong>service</strong> does the real work, the <strong>repository</strong> talks to the database, and a <strong>request context</strong> carries shared facts along the way.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>The request lifecycle inside your server</li><li>What controllers, services and repositories are each responsible for</li><li>How middleware and <code>next()</code> work, and why order matters</li><li>What request context is for, and why user IDs come from it</li></ul></div>
+</div>
+<h2 id="lifecycle">The life of a request inside your server</h2>
+<p>The operating system hands the request to the port your server listens on. From there it passes through middleware, gets routed to a handler, and flows down through the layers and back. Press play and watch the <strong>context</strong> fill up as it goes.</p>
+<figure class="anim" id="fig-life">
+  <figcaption class="anim-title">POST /books, start to finish</figcaption>
+</figure>
+<aside class="callout analogy"><div class="tag">Analogy: a restaurant</div><p>The <strong>host stand</strong> checks every guest on arrival (middleware). The <strong>waiter</strong> takes your order, makes sure it's valid, and brings back the plate and the bill (controller). The <strong>chef</strong> cooks, coordinating several stations, and never talks to customers (service). The <strong>pantry</strong> fetches exactly the ingredients asked for (repository). And the <strong>order ticket</strong> travels with your meal: table number, allergies, notes that every station can read (request context).</p></aside>
+<p>None of this layering is required: you <em>could</em> do everything in one function. It's a design pattern that keeps a growing codebase maintainable, debuggable and easy to extend.</p>
+
+<h2 id="layers">Controller, service, repository</h2>
+<div class="tabs">
+  <div class="tab" data-label="Controller">
+    <p>Speaks HTTP. It receives the <code>request</code> and <code>response</code> objects from your framework, and nothing below it should know HTTP exists.</p>
+<pre><span class="k">async function</span> listBooks(req, res) {
+  <span class="c">// 1. bind: pull data out of the request into native types</span>
+  <span class="k">const</span> input = { sort: req.query.sort };
+  <span class="c">// 2. validate + transform (fill defaults for optional params)</span>
+  <span class="k">const</span> parsed = listBooksSchema.safeParse(input);
+  <span class="k">if</span> (!parsed.success) <span class="k">return</span> res.status(<span class="n">400</span>).json({ errors: parsed.error.issues });
+  <span class="k">const</span> { sort = <span class="s">"date"</span> } = parsed.data;
+  <span class="c">// 3. call the service with clean data + who is asking</span>
+  <span class="k">const</span> books = <span class="k">await</span> bookService.listBooks({ sort, userId: req.ctx.userId });
+  <span class="c">// 4. choose the status code and send the response</span>
+  <span class="k">return</span> res.status(<span class="n">200</span>).json({ data: books });
+}</pre>
+  </div>
+  <div class="tab" data-label="Service">
+    <p>Business logic. It should look like an ordinary function: from a glance, you shouldn't be able to tell it's used by an API. It <strong>orchestrates</strong> repositories, external APIs, emails and notifications.</p>
+<pre><span class="k">async function</span> listBooks({ sort, userId }) {
+  <span class="k">const</span> books = <span class="k">await</span> bookRepo.findAll({ sort });
+  <span class="k">const</span> favourites = <span class="k">await</span> favouriteRepo.findIdsByUser(userId);
+  <span class="k">return</span> books.map(b =&gt; ({ ...b, isFavourite: favourites.has(b.id) }));
+}
+
+<span class="c">// Some services never touch the database:</span>
+<span class="k">async function</span> sendWelcomeEmail({ email }) {
+  <span class="k">await</span> mailer.send(email, <span class="s">"welcome"</span>);
+  <span class="k">return</span> { success: <span class="k">true</span> };
+}</pre>
+  </div>
+  <div class="tab" data-label="Repository">
+    <p>Data access only. It takes parameters, builds a query, and returns what the database returned. <strong>One method, one kind of result.</strong></p>
+<pre><span class="k">async function</span> findAll({ sort }) {
+  <span class="k">const</span> column = sort === <span class="s">"name"</span> ? <span class="s">"name"</span> : <span class="s">"created_at"</span>; <span class="c">// whitelisted, never raw input</span>
+  <span class="k">return</span> db.query(<span class="s">`SELECT id, name, created_at FROM books ORDER BY ${column}`</span>);
+}
+
+<span class="k">async function</span> findById(id) {
+  <span class="k">return</span> db.one(<span class="s">"SELECT * FROM books WHERE id = $1"</span>, [id]);
+}
+<span class="c">// ✕ Don't write findBooks(id?) that returns one book OR all books.</span></pre>
+  </div>
+</div>
+<div class="table-wrap"><table>
+  <thead><tr><th>Layer</th><th>Responsible for</th><th>Never does</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Controller</strong></td><td>Binding (deserialize into native types; 400 if that fails), validation and transformation, calling the service, choosing status codes, shaping the response</td><td>Business rules, SQL</td></tr>
+    <tr><td><strong>Service</strong></td><td>The actual processing: combining repository results, external calls, emails, notifications</td><td>Status codes, reading <code>req</code>/<code>res</code></td></tr>
+    <tr><td><strong>Repository</strong></td><td>Building and running one database operation and returning its result</td><td>Orchestration, HTTP</td></tr>
+  </tbody>
+</table></div>
+<p class="muted small">In Node.js a body-parser middleware usually deserializes JSON before your handler runs. In Go, Python or Rust you typically "bind" the body into a struct or class explicitly in the controller.</p>
+
+<h2 id="middleware">Middleware</h2>
+<p>Middleware are functions that run <strong>in the middle</strong>, at the boundaries between entry, routing, handlers and the response. Like handlers they receive <code>request</code> and <code>response</code>, plus one more thing: <code>next</code>.</p>
+<ul>
+  <li>Call <code>next()</code> to pass control to whatever comes next (another middleware, the router or the handler).</li>
+  <li>Or <strong>respond right away</strong> and end the request there, without wasting resources further down.</li>
+</ul>
+<pre><span class="k">function</span> rateLimit(req, res, next) {
+  <span class="k">const</span> hits = counter.increment(req.ip, { windowSeconds: <span class="n">2</span> });
+  <span class="k">if</span> (hits &gt; <span class="n">30</span>) <span class="k">return</span> res.status(<span class="n">429</span>).json({ message: <span class="s">"Too many requests"</span> }); <span class="c">// stop here</span>
+  next(); <span class="c">// otherwise, hand over</span>
+}</pre>
+<p><strong>Why not just call a helper in each handler?</strong> With hundreds of endpoints, you'd still repeat that call everywhere, and someone will forget one. Middleware runs for every request (or every route in a group) automatically: it's code reuse at the pipeline level.</p>
+<figure class="anim" id="fig-short">
+  <figcaption class="anim-title">Middleware can end a request early</figcaption>
+</figure>
+<div class="cards">
+  <div class="card"><h4>CORS</h4><p>Checks the <code>Origin</code> and adds allow headers for your frontend. Runs first, so unknown origins are rejected early.</p></div>
+  <div class="card"><h4>Security headers</h4><p>Adds CSP, HSTS and similar headers to every response.</p></div>
+  <div class="card"><h4>Logging</h4><p>Records the method, path, status and duration of every request, for debugging and audits.</p></div>
+  <div class="card"><h4>Authentication</h4><p>Verifies the token. Fail → <code>401</code> right here. Success → puts the user and role into the context.</p></div>
+  <div class="card"><h4>Rate limiting</h4><p>Too many requests from one IP in a time window → <code>429</code>.</p></div>
+  <div class="card"><h4>Compression &amp; parsing</h4><p>gzip large responses; parse JSON or form bodies; optionally run validation.</p></div>
+  <div class="card"><h4>Global error handler</h4><p>Catches an error from <em>anywhere</em>, decides 4xx vs 5xx, and returns a consistent error shape.</p></div>
+</div>
+<h3>Order matters</h3>
+<p>Requests flow one way through the chain, so a middleware only sees what happened before it. A typical order:</p>
+<div class="stages" style="margin:10px 0 18px">
+  <span class="st active">CORS</span><span class="arrow">→</span><span class="st active">security headers</span><span class="arrow">→</span><span class="st active">logging</span><span class="arrow">→</span><span class="st active">rate limit</span><span class="arrow">→</span><span class="st active">auth</span><span class="arrow">→</span><span class="st active">routes &amp; handlers</span><span class="arrow">→</span><span class="st bad">error handler (last)</span>
+</div>
+<aside class="callout warn"><div class="tag">Gotcha</div><p>Put the global error handler in the middle and it can't catch errors thrown by handlers after it. It must be last.</p></aside>
+
+<h2 id="context">Request context</h2>
+<p>A <strong>request context</strong> is a small key–value store <strong>scoped to one request</strong>. Every middleware and handler on that request can read and write it, so they can share facts without being wired directly to each other. When the request ends, it's gone.</p>
+<div class="cards">
+  <div class="card"><h4>Who's asking</h4><p>Auth middleware stores <code>userId</code> and <code>role</code>; handlers and permission checks read them later.</p></div>
+  <div class="card"><h4>Request ID</h4><p>A UUID generated up front is logged everywhere and forwarded to other services (e.g. <code>X-Request-ID</code>), so you can trace one request across logs and microservices.</p></div>
+  <div class="card"><h4>Cancellation &amp; deadlines</h4><p>Timeouts and abort signals propagate to downstream calls, so work stops when the client gives up instead of hanging forever.</p></div>
+</div>
+<aside class="callout warn"><div class="tag">Security rule</div><p>When creating a book, take <code>user_id</code> from the <strong>context</strong> (set by verified auth), never from the request body. A malicious client could simply put someone else's ID in the payload.</p></aside>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>Controllers deal with HTTP: bind, validate and transform, call the service, pick the status code, respond.</li>
+  <li>Services hold business logic and orchestration, and know nothing about HTTP.</li>
+  <li>Repositories do one database operation each and return one kind of result.</li>
+  <li>Middleware gets <code>req</code>, <code>res</code> and <code>next</code>: it either passes control on or ends the request early (401, 429…).</li>
+  <li>Middleware order matters: CORS early, error handler last.</li>
+  <li>Request context is request-scoped shared state: user identity, request ID, deadlines. Trust it over client-supplied IDs.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Where should "send a 404 if the book doesn't exist" be decided?</summary><div><p>The service (or repository) reports "not found", for example with a typed error or a null result. The <em>controller</em> (or global error handler) translates that into the HTTP 404. Status codes belong to the HTTP layer.</p></div></details>
+  <details><summary>Why make authentication a middleware instead of code in each handler?</summary><div><p>Every protected route needs it. As middleware it runs automatically, rejects bad tokens early with 401, and stores the user in the context for downstream code, with no duplication and no forgotten routes.</p></div></details>
+  <details><summary>What's wrong with <code>findBooks(id?)</code> returning a single book when given an id and all books otherwise?</summary><div><p>It breaks single responsibility: callers can't rely on the return shape, and the logic branches inside the data layer. Use <code>findAll()</code> and <code>findById(id)</code>.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.flow("#fig-life", {
+  w: 720, h: 380,
+  nodes: {
+    c: { x: 60, y: 60, label: "Client", sub: "POST /books", kind: "client", w: 100 },
+    cors: { x: 190, y: 60, label: "CORS", sub: "middleware", kind: "net", w: 100 },
+    log: { x: 315, y: 60, label: "Logger", sub: "+ request ID", kind: "net", w: 105 },
+    route: { x: 440, y: 60, label: "Router", sub: "match", kind: "server", w: 100 },
+    auth: { x: 570, y: 60, label: "Auth", sub: "verify token", kind: "net", w: 105 },
+    ctl: { x: 570, y: 175, label: "Controller", sub: "bind · validate", kind: "server", w: 120 },
+    svc: { x: 420, y: 175, label: "Service", sub: "business logic", kind: "server", w: 120 },
+    repo: { x: 270, y: 175, label: "Repository", sub: "INSERT", kind: "db", w: 120 },
+    db: { x: 110, y: 175, label: "Postgres", kind: "db", shape: "cyl", w: 110, h: 60 },
+    ctx: { x: 360, y: 315, label: "Request context", sub: "{ }", kind: "cache", w: 520, h: 56 }
+  },
+  edges: [["c", "cors"], ["cors", "log"], ["log", "route"], ["route", "auth"], ["auth", "ctl"], ["ctl", "svc"], ["svc", "repo"], ["repo", "db"], ["log", "ctx", { dashed: true }], ["ctl", "ctx", { dashed: true }]],
+  steps: [
+    { path: ["c", "cors"], packet: "POST /books", hl: ["cors"], note: "The OS forwards the request to your port. <b>CORS middleware</b> checks the origin and adds headers, then calls <code>next()</code>." },
+    { path: ["cors", "log"], hl: ["log"], note: "<b>Logging middleware</b> generates a request ID and records the method and path." },
+    { path: ["log", "ctx"], hl: ["ctx"], set: { ctx: "{ requestId: 7f3a }" }, note: "The request ID goes into the <b>request context</b>, so everything downstream can log it." },
+    { path: ["log", "route", "auth"], hl: ["route", "auth"], set: { ctx: "{ requestId: 7f3a }" }, note: "The <b>router</b> matches <code>POST /books</code>; route-level <b>auth middleware</b> verifies the token." },
+    { path: ["auth", "ctx"], hl: ["ctx"], set: { ctx: "{ requestId: 7f3a, userId: 42, role: editor }" }, note: "Auth stores <b>who is asking</b> in the context: user ID and role." },
+    { path: ["auth", "ctl"], hl: ["ctl"], set: { ctx: "{ requestId: 7f3a, userId: 42, role: editor }" }, note: "The <b>controller</b> binds the JSON into native types, validates and transforms it. Bad data would return 400 here." },
+    { path: ["ctx", "ctl"], hl: ["ctx", "ctl"], set: { ctx: "{ requestId: 7f3a, userId: 42, role: editor }" }, note: "It reads <code>userId</code> <b>from the context</b>, never from the body, and calls the service." },
+    { path: ["ctl", "svc", "repo", "db"], hl: ["svc", "repo", "db"], set: { ctx: "{ requestId: 7f3a, userId: 42, role: editor }" }, note: "The <b>service</b> applies business rules; the <b>repository</b> runs the INSERT." },
+    { path: ["db", "repo", "svc", "ctl"], tone: "ok", packet: "book", set: { ctx: "{ requestId: 7f3a, userId: 42, role: editor }" }, note: "The result flows back up. The service returns plain data, with no status codes." },
+    { path: ["ctl", "auth", "route", "log", "cors", "c"], tone: "ok", packet: "201 Created", ok: ["c"], set: { ctx: "(discarded)" }, note: "The controller picks <b>201 Created</b> and responds. The context is thrown away with the request." }
+  ]
+});
+
+BD.flow("#fig-short", {
+  w: 720, h: 220,
+  nodes: {
+    c: { x: 70, y: 110, label: "Client", kind: "client", w: 110 },
+    rl: { x: 230, y: 110, label: "Rate limit", sub: "≤ 30 / 2s", kind: "net", w: 120 },
+    auth: { x: 395, y: 110, label: "Auth", sub: "valid token?", kind: "net", w: 120 },
+    h: { x: 590, y: 110, label: "Handler", sub: "never reached", kind: "server", w: 140 }
+  },
+  edges: [["c", "rl"], ["rl", "auth"], ["auth", "h"]],
+  steps: [
+    { path: ["c", "rl", "auth", "h"], tone: "ok", packet: "GET /notes", ok: ["h"], set: { h: "runs ✓" }, note: "Normal case: each middleware calls <code>next()</code> and the handler runs." },
+    { path: ["c", "rl", "auth"], packet: "expired token", bad: ["auth"], set: { auth: "invalid ✕" }, note: "An expired token: the auth middleware doesn't call <code>next()</code>…" },
+    { path: ["auth", "rl", "c"], tone: "bad", packet: "401", bad: ["auth"], set: { auth: "invalid ✕" }, note: "…it responds <b>401 Unauthorized</b> immediately. The handler never runs." },
+    { path: ["c", "rl"], packet: "request #31", warn: ["rl"], set: { rl: "31 in 2s ✕" }, note: "A client floods the API: request #31 inside two seconds…" },
+    { path: ["rl", "c"], tone: "warn", packet: "429", warn: ["rl"], set: { rl: "31 in 2s ✕" }, note: "…gets <b>429 Too Many Requests</b> from the rate limiter, before auth even runs." }
+  ]
+});
+</script>
+</body>
+</html>
