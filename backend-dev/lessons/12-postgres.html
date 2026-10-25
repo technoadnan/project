@@ -315,8 +315,8 @@ BD.flow("#fig-er", {
 BD.flow("#fig-ondelete", {
   w: 720, h: 270,
   nodes: {
-    ada: { x: 75, y: 135, label: "users: Ada", sub: "owner", kind: "client", w: 120 },
-    apollo: { x: 260, y: 135, label: "projects: Apollo", sub: "owner_id → Ada", kind: "server", w: 160 },
+    ada: { x: 65, y: 135, label: "users: Ada", sub: "owner", kind: "client", w: 110 },
+    apollo: { x: 272, y: 135, label: "projects: Apollo", sub: "owner_id → Ada", kind: "server", w: 150 },
     t1: { x: 470, y: 60, label: "tasks: T1", sub: "Apollo · Bob", kind: "db", w: 150 },
     t2: { x: 470, y: 210, label: "tasks: T2", sub: "Apollo · Bob", kind: "db", w: 150 },
     bob: { x: 650, y: 135, label: "users: Bob", sub: "assignee", kind: "client", w: 120 }
@@ -324,7 +324,7 @@ BD.flow("#fig-ondelete", {
   edges: [["ada", "apollo", { label: "RESTRICT" }], ["apollo", "t1", { label: "CASCADE", dx: -22 }], ["apollo", "t2", { label: "CASCADE", dx: -22, dy: 14 }], ["bob", "t1", { label: "SET NULL", dx: 26 }], ["bob", "t2", { label: "SET NULL", dx: 26, dy: 14 }]],
   steps: [
     { path: ["ada", "apollo"], tone: "bad", packet: "DELETE Ada", bad: ["ada"], note: "<code>DELETE</code> Ada → <b>ON DELETE RESTRICT</b> blocks it: she still owns Apollo. Error; nothing changes." },
-    { path: [["bob", "t1"], ["bob", "t2"]], tone: "warn", packet: "DELETE Bob", warn: ["t1", "t2"], dim: ["bob"], set: { bob: "deleted", t1: "Apollo · assigned_to NULL", t2: "Apollo · assigned_to NULL" }, note: "Delete Bob → <b>SET NULL</b>: his tasks survive, just unassigned." },
+    { path: [["bob", "t1"], ["bob", "t2"]], tone: "warn", packet: "DELETE Bob", warn: ["t1", "t2"], dim: ["bob"], set: { bob: "deleted", t1: "assignee → NULL", t2: "assignee → NULL" }, note: "Delete Bob → <b>SET NULL</b>: his tasks survive, just unassigned." },
     { path: [["apollo", "t1"], ["apollo", "t2"]], tone: "bad", packet: "DELETE Apollo", dim: ["bob", "t1", "t2"], bad: ["apollo"], set: { bob: "deleted", apollo: "deleted", t1: "deleted (cascade)", t2: "deleted (cascade)" }, note: "Delete Apollo → <b>CASCADE</b>: its tasks are deleted with it. No orphan tasks." },
     { path: ["ada"], tone: "ok", dim: ["bob", "apollo", "t1", "t2"], ok: ["ada"], set: { bob: "deleted", apollo: "deleted", t1: "deleted (cascade)", t2: "deleted (cascade)", ada: "can be deleted ✓" }, note: "Ada owns nothing now, so RESTRICT no longer objects. Each rule protects integrity in a different way." }
   ]
