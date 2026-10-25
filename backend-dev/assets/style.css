@@ -446,3 +446,13 @@ pre mark { background: var(--accent-soft); color: inherit; border-radius: 4px; p
 .era h4 { margin: 0 0 4px; font-size: 17px; }
 .era p { margin: 0 0 6px; color: var(--muted); font-size: 15px; }
 .era .principle { font-size: 13px; }
+
+/* pipeline stages widget */
+.widget textarea { width: 100%; font-family: var(--mono); font-size: 13px; line-height: 1.5; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; resize: vertical; min-height: 120px; }
+.stages { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 12px 0; }
+.stages .st { font-size: 12.5px; font-weight: 600; padding: 5px 10px; border-radius: 99px; border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); transition: all .25s ease; }
+.stages .st.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.stages .st.ok { border-color: transparent; background: var(--ok-soft); color: var(--ok); }
+.stages .st.bad { border-color: transparent; background: var(--bad-soft); color: var(--bad); }
+.stages .st.skip { opacity: .4; }
+.stages .arrow { color: var(--faint); font-size: 12px; }

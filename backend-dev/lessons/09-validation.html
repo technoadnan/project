@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Validation & transformation · Backend Dev</title>
+<meta name="description" content="Syntactic, semantic and type checks at the edge, plus shaping input before it hits logic.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="09">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 9</span><span>Video · 42:48</span></div>
+  <h1>Validations and transformations</h1>
+  <p class="lead">Never trust incoming data. Right after a route matches, and <strong>before any business logic runs</strong>, every request passes through a <strong>validation and transformation pipeline</strong> that checks the data has exactly the shape your API expects and reshapes it into what your code needs.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Where validation sits in the request lifecycle</li><li>Why missing validation turns a 400 into a 500</li><li>Syntactic, semantic, type and complex validations</li><li>Transformations: casting, normalising and why they live in the same pipeline</li><li>Why frontend validation never replaces backend validation</li></ul></div>
+</div>
+<h2 id="where">Where validation happens</h2>
+<p>A typical API call flows <strong>controller → service → repository</strong>. The controller handles HTTP concerns (status codes, response format, validation), the service runs business logic, and the repository talks to the database. Validation sits at the very front: after routing picks a handler, before the controller does anything significant.</p>
+<p>Everything a client sends goes through it: the <strong>JSON body</strong>, <strong>query parameters</strong>, <strong>path parameters</strong> and <strong>headers</strong>.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>Airport security screens bags at the entrance, not halfway through the flight. Validation is the screening gate: check everything once, at the edge, so the rest of the system can trust what's inside.</p></aside>
+
+<h2 id="why">Why it matters: 400 vs 500</h2>
+<p>Say <code>POST /books</code> expects <code>{ "name": "..." }</code> as a string of 5–100 characters, and a client sends <code>{ "name": 0 }</code>.</p>
+<figure class="anim" id="fig-why">
+  <figcaption class="anim-title">Same bad payload, with and without validation</figcaption>
+</figure>
+<p>Without validation, the bad value travels all the way to Postgres, which rejects a number for a <code>text NOT NULL</code> column. The user gets a vague <strong>500 Internal Server Error</strong>, even though <em>they</em> made the mistake. With validation, they get a precise <strong>400 Bad Request</strong> telling them what to fix, and the server never wastes work on it.</p>
+
+<h2 id="pipeline">Inside the pipeline</h2>
+<p>A reusable middleware or utility takes a <strong>schema</strong> and walks each field, failing fast with a specific message:</p>
+<ol>
+  <li><strong>Is it present?</strong> "name is required"</li>
+  <li><strong>Is it the right type?</strong> "expected string, received boolean"</li>
+  <li><strong>Does it meet the constraints?</strong> "must be 5–100 characters"</li>
+</ol>
+<p>A bonus: good validation errors double as documentation. Send an empty body and the errors tell you exactly which fields the API expects.</p>
+
+<h2 id="types">Kinds of validation</h2>
+<div class="cards">
+  <div class="card"><h4>Syntactic</h4><p>Does it have the right <em>structure</em>? An email has <code>name@domain.tld</code>, a phone number has a country code plus digits, a date matches <code>YYYY-MM-DD</code>.</p></div>
+  <div class="card"><h4>Semantic</h4><p>Does it make <em>sense</em>? A date of birth can't be in the future; an age of 430 is impossible (accept 1–120).</p></div>
+  <div class="card"><h4>Type</h4><p>Is it a string, number, boolean, array or object? For arrays, is <em>each element</em> the right type?</p></div>
+  <div class="card"><h4>Complex</h4><p>Rules across fields: <strong>password confirmation must match</strong>; <strong>partner is required only if married is true</strong>.</p></div>
+</div>
+
+<h2 id="transform">Transformations</h2>
+<p>Sometimes data must change before it can be validated or used. The classic case is pagination: <code>/bookmarks?page=2&amp;limit=20</code>. Your schema says <code>page</code> is a number between 1 and 500, but <strong>query parameters always arrive as strings</strong>. <code>"2"</code> would fail the number check even though the client did nothing wrong. So the pipeline <strong>casts</strong> <code>"2"</code> → <code>2</code> first, then validates.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>It's like changing money at the border. Query values arrive in "string currency"; you exchange them into numbers at the gate, before any shop (your validation rules and business logic) has to deal with them.</p></aside>
+<p>Other common transformations are <strong>normalisations</strong>: lower-casing emails, trimming whitespace, adding <code>+</code> to phone numbers, converting date formats. Validation and transformation live in <strong>one pipeline</strong> so every input rule and operation is in a single place.</p>
+
+<h2 id="try">Try the pipeline</h2>
+<p>Edit the request, or load a preset, and run it. Watch where it stops.</p>
+<figure class="anim" id="fig-pipe">
+  <figcaption class="anim-title">Try it: validation and transformation pipeline</figcaption>
+  <div class="widget">
+    <div class="presets" id="vp-presets"></div>
+    <div class="row" style="margin:12px 0 8px"><label style="flex:1">Query <input type="text" id="vp-query" style="flex:1;font-family:var(--mono)"></label></div>
+    <textarea id="vp-body" rows="11" aria-label="JSON body" spellcheck="false"></textarea>
+    <div class="row" style="margin-top:10px"><button class="act" type="button" id="vp-run">Send POST /profile ▶</button></div>
+    <div class="stages" id="vp-stages"></div>
+    <div class="split">
+      <div><h5>Transformations</h5><pre id="vp-log">—</pre></div>
+      <div><h5>Response</h5><pre id="vp-out">—</pre></div>
+    </div>
+  </div>
+</figure>
+
+<h2 id="frontend">Frontend validation is not enough</h2>
+<p>Form validation in the browser is great for <strong>user experience</strong>: instant feedback, no round trip. But it's not security. Anyone can call your API directly with Postman, Insomnia, curl or a script, and skip your frontend entirely.</p>
+<figure class="anim" id="fig-front">
+  <figcaption class="anim-title">Not every request comes through your form</figcaption>
+</figure>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>The bag-size frame at check-in helps passengers know if their bag will fit (frontend validation). The security scanner is mandatory for <em>everyone</em>, including people who walked straight past the frame (backend validation).</p></aside>
+<p>So be as strict and specific as possible on the server, regardless of what any client does.</p>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>Validate and transform at the entry point: after routing, before controllers call services.</li>
+  <li>Validate everything: body, query params, path params and headers.</li>
+  <li>Validation turns confusing 500s into precise 400s, and stops bad data before it reaches the database.</li>
+  <li>Kinds: syntactic (format), semantic (makes sense), type, and complex (cross-field, conditional).</li>
+  <li>Transform (cast, normalise) in the same pipeline. Query and path values are always strings at first.</li>
+  <li>Frontend validation is for UX; backend validation is for security and data integrity. You need both.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Is "end date must be after start date" syntactic, semantic or complex?</summary><div><p>Complex (a relationship between two fields), and semantic in spirit. Each date can be syntactically valid on its own.</p></div></details>
+  <details><summary>Your API rejects <code>?limit=50</code> with "expected number, received string". What's missing?</summary><div><p>A transformation step that casts query string values to numbers before validating them.</p></div></details>
+  <details><summary>The frontend already checks emails. Why check again on the server?</summary><div><p>Requests can bypass the frontend (API clients, scripts, other apps). Server-side validation is the only one you control, so it's the only one that guarantees integrity and security.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.flow("#fig-why", {
+  w: 720, h: 230,
+  nodes: {
+    c: { x: 60, y: 80, label: "Client", sub: "{name: 0}", kind: "client", w: 100 },
+    v: { x: 195, y: 80, label: "Validation", sub: "", kind: "server", w: 112 },
+    ctl: { x: 330, y: 80, label: "Controller", kind: "server", w: 112 },
+    svc: { x: 465, y: 80, label: "Service", kind: "server", w: 100 },
+    repo: { x: 600, y: 80, label: "Repository", kind: "db", w: 112 },
+    db: { x: 600, y: 185, label: "Postgres", sub: "name TEXT NOT NULL", kind: "db", shape: "cyl", w: 150, h: 62 }
+  },
+  edges: [["c", "v"], ["v", "ctl"], ["ctl", "svc"], ["svc", "repo"], ["repo", "db"]],
+  steps: [
+    { path: ["c", "v", "ctl", "svc", "repo", "db"], packet: "name: 0", dim: ["v"], set: { v: "(skipped)" }, warn: ["db"], note: "<b>Without validation</b>, <code>{name: 0}</code> sails through every layer into an INSERT." },
+    { path: ["db", "repo", "svc", "ctl", "c"], tone: "bad", packet: "500", dim: ["v"], set: { v: "(skipped)", db: "type error ✕" }, bad: ["db", "c"], note: "Postgres rejects a number for a text column. The user sees <b>500 Internal Server Error</b>, a server failure for a client mistake." },
+    { path: ["c", "v"], packet: "name: 0", set: { v: "name: string 5–100" }, hl: ["v"], note: "<b>With validation</b>, the schema is checked first: name must be a string of 5–100 characters." },
+    { path: ["v", "c"], tone: "warn", packet: "400", set: { v: "✕ expected string" }, warn: ["v"], note: "It fails fast with <b>400 Bad Request</b>: \"name: expected string, received number\". Nothing else runs." }
+  ]
+});
+
+(function () {
+  var presets = {
+    "messy but valid": { q: "?page=2&limit=20", b: { email: "  Ada@Example.COM ", phone: "919876543210", dob: "1995-06-12", age: 30, password: "s3cretpass", passwordConfirmation: "s3cretpass", married: true, partner: " Grace " } },
+    "empty body": { q: "", b: {} },
+    "wrong types": { q: "?page=two", b: { email: "ada@example.com", phone: 919876543210, dob: "1995-06-12", age: "thirty", password: "s3cretpass", passwordConfirmation: "s3cretpass", married: "no" } },
+    "nonsense values": { q: "?page=900", b: { email: "ada@example", phone: "123", dob: "2031-01-01", age: 430, password: "s3cretpass", passwordConfirmation: "s3cretpass", married: false } },
+    "cross-field rules": { q: "", b: { email: "ada@example.com", phone: "919876543210", dob: "1995-06-12", age: 30, password: "short", passwordConfirmation: "shorter", married: true } }
+  };
+  var $ = function (id) { return document.getElementById(id); };
+  var q = $("vp-query"), body = $("vp-body"), stagesEl = $("vp-stages"), log = $("vp-log"), out = $("vp-out");
+  var names = ["1 · Parse JSON", "2 · Transform", "3 · Validate", "4 · Controller"];
+  stagesEl.innerHTML = names.map(function (n, i) { return (i ? '<span class="arrow">→</span>' : "") + '<span class="st">' + n + "</span>"; }).join("");
+  var chips = stagesEl.querySelectorAll(".st");
+  function load(name) { q.value = presets[name].q; body.value = JSON.stringify(presets[name].b, null, 2); }
+  Object.keys(presets).forEach(function (k) {
+    var b = document.createElement("button"); b.type = "button"; b.textContent = k;
+    b.addEventListener("click", function () { load(k); run(); });
+    $("vp-presets").appendChild(b);
+  });
+  load("messy but valid");
+  function typeOf(v) { return Array.isArray(v) ? "array" : v === null ? "null" : typeof v; }
+  function run() {
+    chips.forEach(function (c) { c.className = "st"; });
+    log.textContent = "…"; out.textContent = "…";
+    var timers = [];
+    var at = function (ms, fn) { timers.push(setTimeout(fn, BD.reduce ? 0 : ms)); };
+    var data, errors = [], tlog = [], query = {};
+    // 1. parse
+    at(0, function () { chips[0].className = "st active"; });
+    try { data = JSON.parse(body.value || "{}"); if (typeOf(data) !== "object") throw new Error("body must be a JSON object"); }
+    catch (e) {
+      at(450, function () { chips[0].className = "st bad"; [1, 2, 3].forEach(function (i) { chips[i].className = "st skip"; }); log.textContent = "—"; out.textContent = "HTTP/1.1 400 Bad Request\n\n" + JSON.stringify({ error: "Invalid JSON body", detail: e.message }, null, 2); });
+      return;
+    }
+    // 2. transform
+    (q.value.replace(/^\?/, "").split("&")).forEach(function (kv) { if (!kv) return; var s = kv.split("="); query[decodeURIComponent(s[0])] = decodeURIComponent(s[1] || ""); });
+    ["page", "limit"].forEach(function (k) {
+      if (query[k] != null && /^\d+$/.test(query[k])) { tlog.push(k + ': "' + query[k] + '" → ' + Number(query[k]) + "   (cast)"); query[k] = Number(query[k]); }
+    });
+    if (typeof data.email === "string") { var e2 = data.email.trim().toLowerCase(); if (e2 !== data.email) tlog.push('email: "' + data.email + '" → "' + e2 + '"   (trim + lowercase)'); data.email = e2; }
+    if (typeof data.phone === "string" && /^\d+$/.test(data.phone)) { tlog.push('phone: "' + data.phone + '" → "+' + data.phone + '"   (normalise)'); data.phone = "+" + data.phone; }
+    if (typeof data.partner === "string") { var p2 = data.partner.trim(); if (p2 !== data.partner) tlog.push('partner: "' + data.partner + '" → "' + p2 + '"   (trim)'); data.partner = p2; }
+    // 3. validate (collect all errors)
+    var err = function (f, m) { errors.push({ field: f, message: m }); };
+    ["page", "limit"].forEach(function (k) {
+      if (query[k] == null) return;
+      if (typeof query[k] !== "number") return err("query." + k, "expected number, received string");
+      var max = k === "page" ? 500 : 10000;
+      if (query[k] < 1 || query[k] > max) err("query." + k, "must be between 1 and " + max);
+    });
+    var spec = { email: "string", phone: "string", dob: "string", age: "number", password: "string", passwordConfirmation: "string", married: "boolean" };
+    Object.keys(spec).forEach(function (f) {
+      if (!(f in data)) return err(f, "is required");
+      if (typeOf(data[f]) !== spec[f]) return err(f, "expected " + spec[f] + ", received " + typeOf(data[f]));
+      var v = data[f];
+      if (f === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v)) err(f, "invalid email format");
+      if (f === "phone" && !/^\+\d{10,15}$/.test(v)) err(f, "invalid phone number");
+      if (f === "dob") {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || isNaN(Date.parse(v))) err(f, "expected date YYYY-MM-DD");
+        else if (new Date(v) > new Date()) err(f, "date of birth cannot be in the future");
+      }
+      if (f === "age" && (v < 1 || v > 120 || v % 1)) err(f, "must be a whole number between 1 and 120");
+      if (f === "password" && v.length < 8) err(f, "must contain at least 8 characters");
+    });
+    if (typeof data.password === "string" && typeof data.passwordConfirmation === "string" && data.password !== data.passwordConfirmation) err("passwordConfirmation", "passwords don't match");
+    if (data.married === true && !(typeof data.partner === "string" && data.partner)) err("partner", "partner is required when married is true");
+    at(450, function () { chips[0].className = "st ok"; chips[1].className = "st active"; });
+    at(950, function () { chips[1].className = "st ok"; chips[2].className = "st active"; log.textContent = tlog.length ? tlog.join("\n") : "(nothing to transform)"; });
+    at(1500, function () {
+      if (errors.length) {
+        chips[2].className = "st bad"; chips[3].className = "st skip";
+        out.textContent = "HTTP/1.1 400 Bad Request\n\n{\n  \"errors\": [\n" + errors.map(function (e) { return "    " + JSON.stringify(e); }).join(",\n") + "\n  ]\n}";
+      } else {
+        chips[2].className = "st ok"; chips[3].className = "st active";
+        timers.push(setTimeout(function () { chips[3].className = "st ok"; }, BD.reduce ? 0 : 400));
+        out.textContent = "HTTP/1.1 200 OK\n\n" + JSON.stringify({ query: query, data: data }, null, 2);
+      }
+    });
+  }
+  $("vp-run").addEventListener("click", run);
+})();
+
+BD.flow("#fig-front", {
+  w: 720, h: 240,
+  nodes: {
+    form: { x: 110, y: 60, label: "Web form", sub: "frontend checks", kind: "client", w: 150 },
+    pm: { x: 110, y: 180, label: "Postman / script", sub: "no frontend at all", kind: "ext", w: 160 },
+    v: { x: 400, y: 120, label: "Server validation", sub: "always runs", kind: "server", w: 160 },
+    svc: { x: 625, y: 120, label: "Business logic", kind: "cache", w: 140 }
+  },
+  edges: [["form", "v"], ["pm", "v"], ["v", "svc"]],
+  steps: [
+    { path: ["form"], packet: "bad email", warn: ["form"], set: { form: "✕ invalid email" }, note: "A user types a bad email. The <b>frontend</b> catches it instantly and no request is sent. Good UX." },
+    { path: ["form", "v", "svc"], packet: "valid", tone: "ok", ok: ["svc"], note: "They fix it; the request passes server validation too." },
+    { path: ["pm", "v"], packet: "bad email", hl: ["v"], note: "Someone calls the API <b>directly</b>. No form, no frontend checks." },
+    { path: ["v", "pm"], tone: "warn", packet: "400", warn: ["v"], set: { v: "✕ caught here" }, note: "Only <b>server-side validation</b> stands between them and your data. That's why it's mandatory." }
+  ]
+});
+</script>
+</body>
+</html>
