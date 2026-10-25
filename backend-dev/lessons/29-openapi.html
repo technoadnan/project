@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenAPI · Backend Dev</title>
+<meta name="description" content="Describe your API once, then generate docs, clients, mocks and validation from it.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="29">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 28</span><span>Video · 43:55</span></div>
+  <h1>OpenAPI: the contract between clients and servers</h1>
+  <p class="lead">Inside one codebase, change a function's signature and the compiler flags every caller. Across HTTP there are no signatures, so a renamed field breaks clients at runtime, in production. <strong>OpenAPI</strong> gives remote calls a signature: one machine-readable file describing every endpoint, from which you generate docs, clients, server interfaces, mocks and tests.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Why API knowledge drifts across backend, frontend and docs</li><li>Where OpenAPI came from, and OAS vs OAD vs OAI vs Swagger</li><li>Anatomy of a description: paths, operations, parameters, bodies, responses, schemas</li><li>Code-first vs design-first</li><li>The design-first pipeline: lint, mock, generate, document, contract-test</li></ul></div>
+</div>
+<h2 id="problem">Three copies of the truth</h2>
+<p>The task board's <code>POST /api/move</code> takes a JSON body with <code>task_id</code>, <code>to</code> and <code>actor</code>, and answers 200, 400, 404 or 502 depending on what happened. Where does that knowledge live? In <strong>three places</strong>: the backend handler that reads the body, the frontend code that calls it, and (maybe) a document someone wrote. Three copies drift:</p>
+<figure class="anim" id="fig-drift">
+  <figcaption class="anim-title">How a rename turns into a production bug</figcaption>
+</figure>
+<p>This problem only exists across a network boundary. Inside one Go codebase, renaming a struct field or changing a <code>string</code> to an <code>int</code> breaks the build at every call site, so you fix it during development. An HTTP call has no signature for a compiler to check, so mismatches surface at runtime.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>A restaurant menu is a contract between the kitchen and the diners: what you can order, what you must specify ("how would you like your steak?"), and what arrives. If the kitchen renames a dish but the printed menus are left as they were, diners order something that no longer exists. OpenAPI is a menu that the kitchen, the waiters and the menu printer all generate from one master copy.</p></aside>
+
+<h2 id="what">What OpenAPI is</h2>
+<p>An <strong>OpenAPI description</strong> is a file, in JSON or YAML (equally supported), that lists every endpoint of your API with its inputs, outputs and behaviour. The specification calls itself a language-agnostic interface description that lets <strong>both humans and computers</strong> understand a service's capabilities <strong>without source code, extra documentation or inspecting network traffic</strong>. From one file you get:</p>
+<div class="cards">
+  <div class="card"><h4>Docs</h4><p>Read-only or interactive: Swagger UI, ReDoc and Scalar render the file and let you send real requests with your token.</p></div>
+  <div class="card"><h4>Clients</h4><p>Typed SDKs in TypeScript, Python, Go, Rust… generated, not hand-written.</p></div>
+  <div class="card"><h4>Server code</h4><p>Interfaces and boilerplate your handlers must satisfy.</p></div>
+  <div class="card"><h4>Validation</h4><p>Middleware that checks query, path and body against the schema, with no hand-written validation code.</p></div>
+</div>
+<figure class="anim" data-steps id="fig-history">
+  <figcaption class="anim-title">From Swagger to OpenAPI</figcaption>
+  <div class="frame" data-note="Tony Tam's motivation in one line: &quot;We often code faster than we can document.&quot;">
+    <div class="era"><span class="yr">2010</span><div><h4>Wordnik's problem</h4><p>A startup with about six engineers and a public API. Customers wanted client libraries in Python, PHP and JavaScript, each with docs. Tony Tam's idea: the server <strong>describes itself in JSON</strong>, and programs read that file to render docs and generate clients. A designer on the team named it <strong>Swagger</strong>.</p></div></div>
+  </div>
+  <div class="frame" data-note="Swagger 2.0 is where adoption took off.">
+    <div class="era"><span class="yr">2011–2014</span><div><h4>Open source and Swagger 2.0</h4><p>Swagger 1.0 was open-sourced in 2011; version 2.0 arrived in 2014.</p></div></div>
+  </div>
+  <div class="frame" data-note="OpenAPI 2.0 and Swagger 2.0 are the same document under different names.">
+    <div class="era"><span class="yr">2015–2016</span><div><h4>A neutral home</h4><p>SmartBear acquired Swagger and donated the specification to the Linux Foundation, creating the <strong>OpenAPI Initiative</strong> with founding members including Google, Microsoft, IBM and PayPal. In January 2016 the spec was renamed <strong>OpenAPI</strong>, content unchanged.</p></div></div>
+  </div>
+  <div class="frame" data-note="Write 3.1 unless you know your tools support newer versions.">
+    <div class="era"><span class="yr">Today</span><div><h4>3.2 exists; most write 3.1</h4><p>The latest version at the time of the video is 3.2.0, but most tools (doc renderers, client and type generators) support 3.1, so that's what most descriptions use.</p></div></div>
+  </div>
+</figure>
+<div class="table-wrap"><table>
+  <thead><tr><th>Term</th><th>Means</th></tr></thead>
+  <tbody>
+    <tr><td><strong>OAS</strong>: OpenAPI Specification</td><td>The rulebook: which fields exist and what they mean.</td></tr>
+    <tr><td><strong>OAD</strong>: OpenAPI Description</td><td>Your file, usually <code>openapi.yaml</code> or <code>openapi.json</code>, following those rules.</td></tr>
+    <tr><td><strong>OAI</strong>: OpenAPI Initiative</td><td>The Linux Foundation organization that maintains the spec.</td></tr>
+    <tr><td><strong>Swagger</strong></td><td>The old name of the spec; today a family of tools such as Swagger UI. A "Swagger file" means an OAD.</td></tr>
+  </tbody>
+</table></div>
+<p>Most people write YAML: it's a superset of JSON and, unlike JSON, allows comments.</p>
+
+<h2 id="anatomy">Anatomy of a description</h2>
+<p>The smallest valid description needs only three fields:</p>
+<div class="split">
+<pre><span class="k">openapi</span>: <span class="s">3.1.1</span>          <span class="c"># version of the SPEC</span>
+<span class="k">info</span>:
+  <span class="k">title</span>: Task Board API
+  <span class="k">version</span>: <span class="s">1.4.0</span>        <span class="c"># version of YOUR API</span>
+<span class="k">paths</span>: {}</pre>
+<div class="card"><h4>The root object</h4><p>Required: <code>openapi</code>, <code>info</code>, and at least one of <code>paths</code>, <code>components</code> or <code>webhooks</code>. Optional: <code>servers</code> (where the API lives: localhost, staging, production, so paths stay relative), <code>security</code> (how clients authenticate) and <code>tags</code> (groups for the docs). Don't confuse the two versions: one is the spec's, one is yours.</p></div>
+</div>
+<p>Here's the move endpoint, fully described:</p>
+<pre><span class="k">servers</span>:
+  - <span class="k">url</span>: http://localhost:8080
+<span class="k">paths</span>:
+  <span class="s">/api/move</span>:                      <span class="c"># keys start with "/"; dynamic parts look like /api/tasks/{id}</span>
+    <span class="k">post</span>:                          <span class="c"># one operation per HTTP method</span>
+      <span class="k">operationId</span>: moveTask         <span class="c"># unique, function-style: becomes client.moveTask()</span>
+      <span class="k">summary</span>: Move a task to another column
+      <span class="k">tags</span>: [tasks]
+      <span class="k">requestBody</span>:
+        <span class="k">required</span>: <span class="n">true</span>
+        <span class="k">content</span>:
+          <span class="s">application/json</span>:          <span class="c"># media type → schema</span>
+            <span class="k">schema</span>: { <span class="k">$ref</span>: <span class="s">"#/components/schemas/MoveRequest"</span> }
+      <span class="k">responses</span>:
+        <span class="s">"200"</span>: { <span class="k">description</span>: Moved, <span class="k">content</span>: { <span class="s">application/json</span>: { <span class="k">schema</span>: { <span class="k">$ref</span>: <span class="s">"#/components/schemas/Event"</span> } } } }
+        <span class="s">"400"</span>: { <span class="k">description</span>: Invalid body }
+        <span class="s">"404"</span>: { <span class="k">description</span>: No task with that id }
+        <span class="s">"502"</span>: { <span class="k">description</span>: Moved, but publishing to the event bus failed }
+<span class="k">components</span>:
+  <span class="k">schemas</span>:
+    <span class="k">MoveRequest</span>:
+      <span class="k">type</span>: object
+      <span class="k">required</span>: [task_id, to]
+      <span class="k">additionalProperties</span>: <span class="n">false</span>
+      <span class="k">properties</span>:
+        <span class="k">task_id</span>: { <span class="k">type</span>: integer, <span class="k">minimum</span>: <span class="n">1</span> }
+        <span class="k">to</span>:      { <span class="k">type</span>: string, <span class="k">enum</span>: [todo, doing, done] }
+        <span class="k">actor</span>:   { <span class="k">type</span>: string, <span class="k">maxLength</span>: <span class="n">40</span>, <span class="k">default</span>: guest }</pre>
+<div class="cards">
+  <div class="card"><h4>Parameters</h4><p>Each has a <code>name</code>, an <code>in</code> (<code>path</code>, <code>query</code>, <code>header</code> or <code>cookie</code>), <code>required</code> and a <code>schema</code>. The polling endpoint takes <code>since</code> (integer) in the query; the SSE endpoint can receive the same value as the <code>Last-Event-ID</code> header. Path parameters are always required; an optional one would describe a different URL.</p></div>
+  <div class="card"><h4>Request bodies</h4><p><code>content</code> maps a media type (what goes in <code>Content-Type</code>) to a schema: <code>application/json</code> for JSON, <code>multipart/form-data</code> for uploads, <code>application/x-www-form-urlencoded</code> for classic HTML forms.</p></div>
+  <div class="card"><h4>Responses</h4><p>Keyed by status code <em>in quotes</em>; each needs a <code>description</code> and usually a <code>content</code> with a schema. Document the errors too, not just the 200.</p></div>
+  <div class="card"><h4>Schemas</h4><p>Types (<code>string</code>, <code>number</code>, <code>integer</code>, <code>boolean</code>, <code>array</code>, <code>object</code>, <code>null</code>) plus constraints: <code>minLength</code>, <code>maxLength</code>, <code>pattern</code>, <code>enum</code>, <code>minimum</code>, <code>maximum</code>, <code>items</code>, <code>properties</code>, <code>required</code>. Nest them to describe any shape; share them via <code>components</code> and <code>$ref</code>.</p></div>
+</div>
+<p>A validator reads that schema and enforces it before your handler runs. Try the bodies the different clients might send:</p>
+<figure class="anim" id="fig-validate">
+  <figcaption class="anim-title">Try it: validate a request body against MoveRequest</figcaption>
+  <div class="widget">
+    <div class="row presets" id="va-presets">
+      <button type="button" data-p="ok">valid</button>
+      <button type="button" data-p="stale">from the stale doc</button>
+      <button type="button" data-p="type">wrong type</button>
+      <button type="button" data-p="enum">not in enum</button>
+    </div>
+    <textarea id="va-body" spellcheck="false" style="min-height:110px"></textarea>
+    <div class="out" id="va-out" style="margin-top:8px"></div>
+  </div>
+</figure>
+
+<h2 id="approaches">Code-first or design-first?</h2>
+<div class="split">
+  <div class="card"><h4>Code-first</h4><p>Write handlers first; <em>derive</em> the description from annotations, comments above handlers, or the types themselves. Python's FastAPI generates it from your handlers' type hints. In TypeScript, Zod schemas wired into a ts-rest contract can generate <code>openapi.json</code> from code, which beats comments: code is easier to maintain and harder to let rot.</p></div>
+  <div class="card"><h4>Design-first (contract-first)</h4><p>Write the description <em>before</em> the implementation; the server, clients, mocks and tests all follow it. The Swagger team itself started code-first, because they had an existing server, and later concluded contract-first makes more sense.</p></div>
+</div>
+<p>Code-first is natural when the server already exists. For new projects, design-first pays off: once frontend and backend agree on the contract, they can be built <strong>in parallel</strong>, with neither blocked on the other. The same applies to AI coding agents: settle the contract, then one agent builds the server while another builds the client.</p>
+
+<h2 id="pipeline">The design-first pipeline</h2>
+<p>Everything below derives from one file, the single source of truth.</p>
+<figure class="anim" id="fig-pipeline">
+  <figcaption class="anim-title">One file feeds every stage</figcaption>
+</figure>
+<div class="tabs">
+  <div class="tab" data-label="Generated TypeScript client">
+<pre><span class="c">// types generated by openapi-typescript; calls via openapi-fetch</span>
+<span class="k">import</span> createClient <span class="k">from</span> <span class="s">"openapi-fetch"</span>;
+<span class="k">import type</span> { paths } <span class="k">from</span> <span class="s">"./api.d.ts"</span>;
+
+<span class="k">const</span> client = createClient&lt;paths&gt;({ baseUrl: <span class="s">"http://localhost:8080"</span> });
+
+<span class="k">const</span> { data, error } = <span class="k">await</span> client.POST(<span class="s">"/api/move"</span>, {
+  body: { task_id: <span class="n">7</span>, column: <span class="s">"done"</span> },
+<span class="e">  //                 ~~~~~~ Object literal may only specify known properties,
+  //                        and 'column' does not exist in type 'MoveRequest'.</span>
+});</pre>
+  </div>
+  <div class="tab" data-label="Generated Go server interface">
+<pre><span class="c">// generated by oapi-codegen (strict server): handlers must implement this</span>
+<span class="k">type</span> StrictServerInterface <span class="k">interface</span> {
+    GetBoard(ctx context.Context, req GetBoardRequestObject) (GetBoardResponseObject, <span class="k">error</span>)
+    MoveTask(ctx context.Context, req MoveTaskRequestObject) (MoveTaskResponseObject, <span class="k">error</span>)
+}
+
+<span class="c">// Add a field or an operation to openapi.yaml, regenerate, and</span>
+<span class="c">// the build fails until the handler matches the contract again.</span></pre>
+  </div>
+  <div class="tab" data-label="Lint output">
+<pre>$ spectral lint openapi.yaml
+<span class="e">  2:6   warning  info-contact           Info object must have "contact" object.
+ 14:10  warning  operation-description  Operation "description" must be present and non-empty string.
+ 31:11  warning  operation-description  Operation "description" must be present and non-empty string.</span>
+✖ 3 problems
+
+$ spectral lint openapi.yaml    <span class="c"># after fixing</span>
+<span class="s">No results with a severity of 'error' found!</span></pre>
+  </div>
+</div>
+<p>OpenAPI is the industry's common language for HTTP APIs: GitHub and Stripe publish theirs (roughly 344,000 and 171,000 lines respectively) so anyone can generate clients. And it has found a new audience: AI agents use API descriptions to understand which tools they can call and how.</p>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>API knowledge spread across handler, client code and docs drifts; across HTTP nothing catches the mismatch until runtime.</li>
+  <li>An OpenAPI description is one JSON/YAML file describing every endpoint's inputs, outputs and behaviour, readable by humans and machines.</li>
+  <li>OAS is the rulebook, OAD your file, OAI the organization; Swagger is the old name and now a set of tools.</li>
+  <li>Key pieces: <code>servers</code>, <code>paths</code> → operations (with a function-style <code>operationId</code>), parameters (<code>in</code>), request bodies and responses by media type, and schemas with constraints, shared through <code>components</code>.</li>
+  <li>Code-first derives the file from code; design-first writes it first so teams (and agents) work in parallel.</li>
+  <li>Lint it (Spectral), mock it (Prism), generate clients and server interfaces, render docs (Swagger UI, ReDoc, Scalar), and contract-test the real server (Schemathesis).</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Why does renaming a field break a frontend at runtime, while renaming a Go struct field breaks the build?</summary><div><p>Inside one codebase the compiler checks every call against the function's signature. An HTTP call has no signature the compiler can see, so mismatches only appear when the request is made, unless both sides are generated from or checked against a shared contract.</p></div></details>
+  <details><summary>What's the difference between <code>openapi: 3.1.1</code> and <code>info.version: 1.4.0</code>?</summary><div><p>The first is the version of the OpenAPI Specification the file follows; the second is the version of your API.</p></div></details>
+  <details><summary>Your frontend team is blocked waiting for the backend. How does design-first help?</summary><div><p>Agree on the OpenAPI description first, run a mock server (e.g. Prism) that answers with the documented examples, and generate a typed client. The frontend builds against the mock while the backend implements the same contract.</p></div></details>
+  <details><summary>How can you verify that the running server actually matches its description?</summary><div><p>Contract testing: a tool like Schemathesis generates valid and invalid requests from the schemas, sends them to the real server, and checks every response against the description.</p></div></details>
+  <details><summary>Why should <code>operationId</code> look like a function name?</summary><div><p>Generators turn each operation into a function or method named after it (<code>moveTask</code>, <code>getBoard</code>), so it must be unique and a valid identifier.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.flow("#fig-drift", {
+  w: 720, h: 290,
+  nodes: {
+    be: { x: 110, y: 60, label: "Backend handler", sub: "reads {task_id, to}", kind: "server", w: 180 },
+    fe: { x: 110, y: 230, label: "React frontend", sub: "sends {task_id, to}", kind: "client", w: 180 },
+    doc: { x: 400, y: 145, label: "API doc (wiki)", sub: "says {task_id, to}", kind: "ext", w: 180 },
+    nw: { x: 630, y: 145, label: "New page", sub: "", kind: "client", w: 140 }
+  },
+  edges: [["be", "fe", { dashed: true }], ["be", "doc", { dashed: true }], ["fe", "doc", { dashed: true }], ["doc", "nw"], ["nw", "be"]],
+  steps: [
+    { hl: ["be", "fe", "doc"], dim: ["nw"], note: "Three copies of the same knowledge: the handler, the frontend's fetch calls, and a document." },
+    { path: ["be", "fe"], warn: ["be", "fe"], dim: ["nw"], set: { be: "reads {task_id, column}", fe: "sends {task_id, column}" }, note: "A teammate renames <code>to</code> to <code>column</code>, updates the handler, updates the frontend…" },
+    { bad: ["doc"], dim: ["nw"], set: { be: "reads {task_id, column}", fe: "sends {task_id, column}", doc: "still says {task_id, to}" }, note: "…and forgets the document. Nothing enforces it, so nothing complains." },
+    { path: ["doc", "nw", "be"], tone: "bad", bad: ["nw"], set: { be: "400: unknown field \"to\"", fe: "sends {task_id, column}", doc: "still says {task_id, to}", nw: "built from the doc" }, note: "Two sprints later, a new engineer builds another page from the document, the one that <em>claims</em> to be the source of truth, and gets validation errors from the backend." }
+  ]
+});
+
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var P = {
+    ok: '{\n  "task_id": 7,\n  "to": "done",\n  "actor": "priya"\n}',
+    stale: '{\n  "task_id": 7,\n  "column": "done"\n}',
+    type: '{\n  "task_id": "7",\n  "to": "doing"\n}',
+    enum: '{\n  "task_id": 7,\n  "to": "finished"\n}'
+  };
+  var S = { required: ["task_id", "to"], props: { task_id: { type: "integer", minimum: 1 }, to: { type: "string", enum: ["todo", "doing", "done"] }, actor: { type: "string", maxLength: 40, def: "guest" } } };
+  function esc(s) { return String(s).replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); }
+  function check() {
+    var body, errs = [];
+    try { body = JSON.parse($("va-body").value); } catch (e) { $("va-out").innerHTML = '<span class="verdict bad">400 · body is not valid JSON</span>'; return; }
+    if (body === null || typeof body !== "object" || Array.isArray(body)) { $("va-out").innerHTML = '<span class="verdict bad">400 · body must be an object</span>'; return; }
+    S.required.forEach(function (k) { if (!(k in body)) errs.push(["/" + k, "is required"]); });
+    Object.keys(body).forEach(function (k) {
+      var s = S.props[k], v = body[k];
+      if (!s) { errs.push(["/" + k, "is not allowed (additionalProperties: false)"]); return; }
+      if (s.type === "integer" && !(typeof v === "number" && Number.isInteger(v))) errs.push(["/" + k, "must be integer, got " + (typeof v)]);
+      else if (s.type === "integer" && v < s.minimum) errs.push(["/" + k, "must be ≥ " + s.minimum]);
+      if (s.type === "string" && typeof v !== "string") errs.push(["/" + k, "must be string, got " + (typeof v)]);
+      else if (s.enum && s.enum.indexOf(v) < 0) errs.push(["/" + k, "must be one of: " + s.enum.join(", ")]);
+      else if (s.maxLength && v.length > s.maxLength) errs.push(["/" + k, "must be at most " + s.maxLength + " characters"]);
+    });
+    if (errs.length) {
+      $("va-out").innerHTML = '<span class="verdict bad">400 Bad Request: rejected before your handler runs</span><pre style="margin-top:8px">' + esc('{ "errors": [\n' + errs.map(function (e) { return "  " + JSON.stringify({ field: e[0], message: e[1] }); }).join(",\n") + "\n] }") + "</pre>";
+    } else {
+      var out = Object.assign({}, body); if (!("actor" in out)) out.actor = S.props.actor.def;
+      $("va-out").innerHTML = '<span class="verdict ok">Valid: the handler receives</span><pre style="margin-top:8px">' + esc(JSON.stringify(out, null, 2)) + "</pre>" + (body.actor ? "" : '<p class="small muted" style="margin:4px 0 0"><code>actor</code> was omitted, so the documented default "guest" applies.</p>');
+    }
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("#va-presets button"), function (b) { b.addEventListener("click", function () { $("va-body").value = P[b.getAttribute("data-p")]; check(); }); });
+  $("va-body").addEventListener("input", check);
+  $("va-body").value = P.ok; check();
+})();
+
+BD.flow("#fig-pipeline", {
+  w: 720, h: 320,
+  nodes: {
+    spec: { x: 360, y: 160, label: "openapi.yaml", sub: "single source of truth", kind: "queue", w: 180, h: 64 },
+    lint: { x: 105, y: 55, label: "1 · Lint", sub: "Spectral", kind: "net", w: 170 },
+    mock: { x: 105, y: 160, label: "2 · Mock server", sub: "Prism", kind: "net", w: 170 },
+    docs: { x: 105, y: 265, label: "5 · Docs", sub: "Swagger UI · ReDoc · Scalar", kind: "client", w: 190 },
+    cli: { x: 615, y: 55, label: "3 · Client types", sub: "openapi-typescript", kind: "client", w: 180 },
+    srv: { x: 615, y: 160, label: "4 · Server interface", sub: "oapi-codegen (Go)", kind: "server", w: 180 },
+    ct: { x: 615, y: 265, label: "6 · Contract tests", sub: "Schemathesis", kind: "db", w: 180 }
+  },
+  edges: [["spec", "lint"], ["spec", "mock"], ["spec", "docs"], ["spec", "cli"], ["spec", "srv"], ["spec", "ct"]],
+  steps: [
+    { path: ["spec", "lint"], hl: ["lint"], note: "<b>Lint:</b> like ESLint for your description. Spectral flags a missing contact, operations without descriptions, responses without schemas. Fix, re-run, pass." },
+    { path: ["spec", "mock"], hl: ["mock"], note: "<b>Mock:</b> Prism serves the documented examples and accepts bodies matching the schemas, before any backend code exists. The frontend can start today." },
+    { path: ["spec", "cli"], hl: ["cli"], note: "<b>Client:</b> openapi-typescript turns paths and schemas into TypeScript types (openapi-fetch makes the calls). A misspelled field or wrong type is now a compile error." },
+    { path: ["spec", "srv"], hl: ["srv"], note: "<b>Server:</b> oapi-codegen generates Go interfaces your handlers must implement. Change the contract and the build fails until the handler catches up." },
+    { path: ["spec", "docs"], hl: ["docs"], note: "<b>Docs:</b> render the same file as Swagger UI (with \"Try it out\"), ReDoc, or Scalar's modern interactive reference." },
+    { path: ["spec", "ct"], tone: "ok", ok: ["ct", "lint", "mock", "cli", "srv", "docs"], note: "<b>Contract tests:</b> Schemathesis generates valid <em>and</em> invalid requests from the schemas, fires them at the real server, and flags any response that breaks the contract." }
+  ]
+});
+</script>
+</body>
+</html>
