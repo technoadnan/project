@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DevOps · Backend Dev</title>
+<meta name="description" content="Containers, CI/CD, infrastructure as code, deployment strategies and running in production.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="31">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 30</span><span>Video · 1:48:26</span></div>
+  <h1>DevOps for backend engineers</h1>
+  <p class="lead">Everything in this course ran on <code>localhost</code>. DevOps is the journey from a commit on your laptop to a service on the internet that <strong>stays up while you ship changes every day</strong>. This final lesson builds a mental model of the whole path: pipelines, containers from first principles, orchestration, deployment strategies, infrastructure as code, and running production.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Why small, frequent deploys are both faster and safer (DORA)</li><li>CI, trunk-based development, builds and pipelines</li><li>What a container really is: namespaces, cgroups, layers, registries</li><li>Running services: systemd, TLS, Kamal, Kubernetes</li><li>Rolling, blue-green and canary deploys; GitOps</li><li>Infrastructure as code, SLOs, incidents, chaos and supply-chain security</li></ul></div>
+</div>
+<h2 id="what">Dev, Ops, and the wall between them</h2>
+<p>In many companies two teams faced each other. Developers were measured by how fast they shipped features; operations by how rarely production broke. Every deploy adds risk, so ops wanted fewer of them, and when something broke each side blamed the other ("it's your code" / "it's your machines"). Releases slowed to once every week or two, with everyone on deck.</p>
+<p>The <strong>DevOps</strong> movement is a collection of practices that grew out of fixing this: infrastructure defined in code, everything (including infrastructure config) in version control, <strong>one command to build and one to deploy</strong>, feature flags to switch features on and off without deploying, and observability shared with developers. The common thread: make deployment <strong>small, cheap and boring</strong>, a merge or a button that takes seconds, so nobody hesitates to do it several times a day.</p>
+
+<h2 id="dora">Measure it: the DORA metrics</h2>
+<div class="cards">
+  <div class="card"><h4>Change lead time</h4><p>Commit merged at 9:00, live at 11:00: two hours.</p></div>
+  <div class="card"><h4>Deployment frequency</h4><p>How often you deploy to production.</p></div>
+  <div class="card"><h4>Change failure rate</h4><p>4 of 100 deploys caused failures: 4%.</p></div>
+  <div class="card"><h4>Failed deployment recovery</h4><p>How long it takes to recover when one does fail.</p></div>
+</div>
+<p>DORA surveyed tens of thousands of teams. In 2024 the top group (about 20% of teams) deployed on demand, got commits to production in under a day, saw about 5% of deploys fail and recovered in under an hour. The bottom group deployed every one to six months, saw about 40% fail and took a week to recover. <strong>The teams that deployed most were also the most stable.</strong> Speed and stability are not a trade-off.</p>
+<figure class="anim" id="fig-batch">
+  <figcaption class="anim-title">Try it: why small deploys are safer (10 engineers, 200 commits a month)</figcaption>
+  <div class="widget">
+    <div class="row"><label style="flex:1">Deploys per month <input type="range" id="bt-r" min="0" max="4" value="0" style="flex:1"> <b id="bt-v"></b></label></div>
+    <div class="tiles" id="bt-tiles"></div>
+    <div class="out" id="bt-out"></div>
+  </div>
+</figure>
+
+<h2 id="ci">Continuous integration and trunk-based development</h2>
+<p><strong>Continuous integration</strong> is a practice: every developer merges into one shared branch <strong>at least daily</strong>, and every merge is verified by an automated build and test run. The CI server only enforces the checks; it can't make people merge. Two branches that lived apart for three weeks take hours to reconcile; a day's drift takes minutes, and everyone still remembers their changes.</p>
+<div class="split">
+  <div class="card"><h4>Git-flow</h4><p>Develop, release, hotfix and main branches. Built for software shipped as versions that customers install (desktop and mobile apps), where version 2 needs support while version 3 is being built. Its own author later recommended something simpler for continuously shipped web apps.</p></div>
+  <div class="card"><h4>Trunk-based development</h4><p>One main branch, short-lived feature branches (a day or two), deleted after merging, and releases from main. A backend has exactly one version in production. A feature that takes three weeks ships in small merges behind a <strong>feature flag</strong>.</p></div>
+</div>
+
+<h2 id="pipeline">Builds, pipelines and credentials</h2>
+<p>A <strong>build</strong> turns source into a runnable <strong>artifact</strong>. It must be reproducible: same source and config in, byte-identical artifact out, no matter what the build machine has installed. That means a pinned toolchain plus a committed lockfile (lesson 27): <code>go build</code> with a pinned Go version and <code>go.sum</code>, or <code>npm ci</code> with <code>package-lock.json</code>. Stamp the commit hash into the artifact.</p>
+<p>A <strong>deployment pipeline</strong> chains stages from cheap to expensive: compile and unit tests in minutes (fail fast, notify the author), then integration tests with real databases and a staging deploy, then production.</p>
+<div class="split">
+<pre><span class="c"># .github/workflows/deploy.yml</span>
+<span class="k">on</span>: { push: { branches: [main] } }      <span class="c"># event</span>
+<span class="k">permissions</span>: { id-token: write, contents: read }
+<span class="k">jobs</span>:
+  <span class="k">test</span>:                                <span class="c"># job on a fresh runner</span>
+    <span class="k">runs-on</span>: ubuntu-latest
+    <span class="k">steps</span>:
+      - uses: actions/checkout@v4      <span class="c"># always first: the VM is empty</span>
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: go test ./...
+  <span class="k">build</span>:
+    <span class="k">needs</span>: test                        <span class="c"># waits for test</span>
+    <span class="k">runs-on</span>: ubuntu-latest
+    <span class="k">steps</span>:
+      - uses: actions/checkout@v4
+      - run: go build -ldflags "-X main.commit=${{ github.sha }}" -o server .</pre>
+<div class="card"><h4>GitHub Actions vocabulary</h4><p><b>Workflow</b>: a YAML file in <code>.github/workflows</code>. <b>Event</b>: what triggers it (push, pull request, schedule, manual click). <b>Job</b>: steps on one machine; jobs run in parallel or wait for each other with <code>needs</code>. <b>Runner</b>: a fresh VM per job (or self-hosted). <b>Step</b>: one command or action.</p></div>
+</div>
+<p>At some point the pipeline must touch your cloud account. Long-lived keys stored as repository secrets can be read by any job and work from anywhere until rotated. <strong>OpenID Connect</strong> removes them:</p>
+<figure class="anim" id="fig-oidc">
+  <figcaption class="anim-title">Short-lived cloud credentials with OIDC</figcaption>
+</figure>
+<aside class="callout note"><div class="tag">Versions</div><p>Libraries use <strong>semantic versioning</strong> (<code>major.minor.patch</code>) because their users depend on compatibility. A service's users are HTTP clients who don't care about deploy versions, so version deploys by <strong>commit hash</strong> (plus a build ID): stamp it on the artifact and the image tag, and expose it from a <code>/version</code> or health endpoint to check what's actually running.</p></aside>
+
+<h2 id="containers">Containers from first principles</h2>
+<p>A Go binary that runs on your laptop fails on the server: an older system library, a different certificate store, no time-zone database. A Node app written against Node 22 meets Node 18 in production. The fix: <strong>ship the environment too</strong>, meaning the runtime, libraries and files your process needs, packaged so it behaves identically on a laptop, a data-center server or a rented VPS.</p>
+<div class="split">
+  <div class="stack-cmp"><h5>Virtual machines</h5><div class="app">App A</div><div class="app">App B</div><div class="os">Guest OS + kernel</div><div class="os">Guest OS + kernel</div><div class="hv">Hypervisor</div><div class="hw">Hardware</div></div>
+  <div class="stack-cmp"><h5>Containers</h5><div class="app">App A</div><div class="app">App B</div><div class="ct">namespaces + cgroups</div><div class="ct">namespaces + cgroups</div><div class="hv">One host kernel</div><div class="hw">Hardware</div></div>
+</div>
+<p>A VM virtualizes hardware and runs its own kernel: strong isolation, but gigabytes of RAM, slow boots and its own disk. A container is <strong>not a small VM</strong>. It's an ordinary process started by the host's kernel (it shows up in the host's <code>ps</code>) that the kernel treats specially: it gets its own process IDs, hostname, filesystem root and network interfaces, plus limits on CPU and memory. Three kernel features make that illusion.</p>
+<h3>1. Namespaces: what a process can see</h3>
+<p>A namespace wraps a global resource so a group of processes sees its own copy. Linux has eight: <b>PID</b> (the process sees itself as PID 1), <b>UTS</b> (hostname), <b>mount</b>, <b>network</b> (two containers can both listen on port 80), <b>IPC</b>, <b>user</b>, <b>cgroup</b> and <b>time</b>. Three system calls manage them: <code>clone</code> (start a process in new namespaces), <code>unshare</code> (move the caller into new ones) and <code>setns</code> (join existing ones). Docker and Kubernetes ultimately use exactly these. Liz Rice's talk <em>Containers From Scratch</em> builds one in about 76 lines of Go:</p>
+<div class="tabs">
+  <div class="tab" data-label="The heart of it">
+<pre>cmd := exec.Command(<span class="s">"/proc/self/exe"</span>, append([]<span class="k">string</span>{<span class="s">"child"</span>}, os.Args[<span class="n">2</span>:]...)...)
+cmd.SysProcAttr = &amp;syscall.SysProcAttr{
+    Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
+}
+<span class="c">// in the child:</span>
+syscall.Sethostname([]<span class="k">byte</span>(<span class="s">"container"</span>))
+syscall.Chroot(<span class="s">"/home/rootfs/ubuntu"</span>)   <span class="c">// an unpacked Ubuntu filesystem</span>
+syscall.Chdir(<span class="s">"/"</span>)
+syscall.Mount(<span class="s">"proc"</span>, <span class="s">"proc"</span>, <span class="s">"proc"</span>, <span class="n">0</span>, <span class="s">""</span>) <span class="c">// so ps reads the new PID namespace</span>
+<span class="c">// …then exec the requested command, e.g. /bin/bash</span></pre>
+  </div>
+  <div class="tab" data-label="Inside the container">
+<pre>root@container:/# hostname
+container
+root@container:/# ps
+  PID TTY          TIME CMD
+    1 ?        00:00:00 exe
+    5 ?        00:00:00 bash
+    9 ?        00:00:00 ps</pre>
+  </div>
+  <div class="tab" data-label="On the host">
+<pre>$ ps -ef | grep -A1 "exe child"
+root   48211  48205  0 10:02 pts/1  00:00:00 /proc/self/exe child /bin/bash
+root   48216  48211  0 10:02 pts/1  00:00:00 /bin/bash
+<span class="c"># the same shell, as an ordinary process with an ordinary PID</span></pre>
+  </div>
+</div>
+<h3>2. Control groups: how much it can use</h3>
+<p>Namespaces limit what a process <em>sees</em>, not what it <em>uses</em>: it could still eat all the host's memory. <strong>cgroups</strong> are plain folders under <code>/sys/fs/cgroup</code>. Write a number into <code>memory.max</code>, <code>cpu.max</code> or <code>pids.max</code>, and every process listed in that folder's <code>cgroup.procs</code> shares the limit. When Kubernetes gives a container a 512 MiB limit, the kubelet writes that number into <code>memory.max</code>; exceed it and the kernel's OOM killer ends the process: the familiar <code>OOMKilled</code> status.</p>
+<h3>3. Layers: where the filesystem comes from</h3>
+<p>That chroot target held about 100 MB of Ubuntu. Containers don't copy it each time. An image is a stack of <strong>layers</strong>, each a tarball of changes (files added, modified, deleted), combined at runtime by <strong>OverlayFS</strong>:</p>
+<figure class="anim" data-steps id="fig-overlay">
+  <figcaption class="anim-title">OverlayFS: shared read-only layers, one thin writable layer</figcaption>
+  <div class="frame" data-note="Lower layers are read-only and shared. Reading /etc/ssl/certs finds the copy in the topmost layer that has it.">
+    <div class="layers"><div class="ly up">writable upper layer (this container) <span>empty</span></div><div class="ly">layer 3: <code>/server</code> binary (11 MB)</div><div class="ly hit">layer 2: CA certificates ← read hits here</div><div class="ly">layer 1: base image</div></div>
+  </div>
+  <div class="frame" data-note="Writing a file copies it up into the container's writable layer first. The layers below never change, so ten containers from one image share every lower layer.">
+    <div class="layers"><div class="ly up hit">writable upper layer <span>/tmp/report.csv · copied-up /etc/hosts</span></div><div class="ly">layer 3: <code>/server</code> binary (11 MB)</div><div class="ly">layer 2: CA certificates</div><div class="ly">layer 1: base image</div></div>
+  </div>
+  <div class="frame" data-note="Stop the container and its writable layer is thrown away. Container filesystems are disposable; anything worth keeping belongs in a volume, a database or object storage.">
+    <div class="layers"><div class="ly up gone">writable upper layer <span>discarded</span></div><div class="ly">layer 3: <code>/server</code> binary (11 MB)</div><div class="ly">layer 2: CA certificates</div><div class="ly">layer 1: base image</div></div>
+  </div>
+</figure>
+<p>An image is a set of <strong>blobs</strong> (the layer tarballs, each named by its SHA-256 hash), a <strong>config</strong> (layer order plus the command, environment, working directory and ports) and a <strong>manifest</strong> pointing at them; the image's identity is the manifest's hash. Tags like <code>ubuntu:24.04</code> point at those digests. Think of an image as a <strong>git commit for a filesystem</strong>: shared layers are stored once, and changing one Dockerfile line changes only the layers after it.</p>
+<h3>Dockerfiles and the build cache</h3>
+<p>Each instruction that changes the filesystem produces a layer, and the builder reuses cached layers <strong>top-down until the first instruction whose inputs changed</strong>; everything after is rebuilt. Order matters:</p>
+<figure class="anim" id="fig-cache">
+  <figcaption class="anim-title">Try it: what gets rebuilt?</figcaption>
+  <div class="widget">
+    <div class="row presets" id="ca-change"><button type="button" data-c="code">Edit a .go file</button><button type="button" data-c="dep">Add a dependency</button></div>
+    <div class="split" id="ca-out"></div>
+  </div>
+</figure>
+<p>For compiled languages, add a <strong>multi-stage build</strong>: one stage with the compiler builds the binary; the final stage starts from a tiny base image and copies in only the binary, leaving compilers and build dependencies behind.</p>
+<h3>Registries and the runtime stack</h3>
+<p>Builds and runs often happen on different machines, so artifacts travel through a <strong>registry</strong> (Docker Hub, GitHub's, AWS, GCP, Azure, or self-hosted): an HTTP server of blobs addressed by digest and manifests addressed by tag or digest. A push uploads only the blobs the registry lacks; a pull fetches the manifest, then only the missing layers, which is why pulling a new version after a small code change takes seconds.</p>
+<figure class="anim" id="fig-run">
+  <figcaption class="anim-title">Who actually makes the system calls on <code>docker run</code>?</figcaption>
+</figure>
+<div class="cards">
+  <div class="card"><h4>A good image is…</h4><p><b>Small</b> (less to patch and pull) · <b>one process</b> (no init system or cron inside) · <b>non-root</b> · <b>pinned</b> (<code>golang:1.23.4</code>, not <code>latest</code>) · <b>scanned</b> against published vulnerabilities.</p></div>
+  <div class="card"><h4>No Dockerfile?</h4><p>Buildpacks and Nixpacks, used by platforms like Render and Railway, detect your language from <code>package.json</code>, <code>go.mod</code>, <code>requirements.txt</code> or <code>Cargo.toml</code> and build an optimized image for you.</p></div>
+</div>
+
+<h2 id="running">Running it: one machine, then many</h2>
+<p>Running a service on a Linux machine means three things: a <strong>process</strong> started at boot and restarted when it dies (systemd), a <strong>reverse proxy</strong> on ports 80/443 terminating TLS and forwarding to your port (Nginx or Caddy), and <strong>logs</strong> you can read (stdout into the journal, read with <code>journalctl -u tasker</code>).</p>
+<div class="split">
+<pre><span class="c"># /etc/systemd/system/tasker.service</span>
+[Unit]
+Description=Tasker API
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/docker run --rm --name tasker \
+  -p 127.0.0.1:8080:8080 --env-file /etc/tasker.env \
+  ghcr.io/acme/tasker@sha256:3f9a…
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target</pre>
+<pre><span class="c"># Caddyfile: HTTPS certificates are automatic</span>
+api.tasker.app {
+    reverse_proxy 127.0.0.1:8080
+}</pre>
+</div>
+<p>HTTPS certificates used to be a manual chore. Now the <strong>ACME</strong> protocol automates it, and <strong>Let's Encrypt</strong> runs it at scale for free:</p>
+<figure class="anim" id="fig-acme">
+  <figcaption class="anim-title">Getting a certificate with ACME</figcaption>
+</figure>
+<p>More traffic means more machines (lesson 21.2), and deploying to each by hand gets slow and risky. <strong>Kamal</strong> automates it over SSH: install Docker if needed, build and push the image, pull it on every host, start the new container alongside the old one, wait for <code>/health</code> to answer, switch the proxy to the new container, then stop the old one.</p>
+<aside class="callout analogy"><div class="tag">Cattle, not pets</div><p>A pet server has a name, gets nursed back to health, and only one or two people know how. That's the snowflake from lesson 27. Cattle are numbered and replaced without ceremony. <strong>Immutable infrastructure</strong> means never modifying a running server: change the code, build a new image, replace the instances. Containers made replacement cheap, and everything from here on assumes it.</p></aside>
+
+<h2 id="kubernetes">Orchestration: Kubernetes</h2>
+<p>With 40 containers on 10 machines, new questions appear. Which container runs where? Who restarts containers when a machine dies? Who adds copies when traffic doubles? Who swaps 40 old containers for 40 new ones in the right order? That's an <strong>orchestrator</strong>'s job, and the best-known is <strong>Kubernetes</strong>, the open-source descendant of the system Google ran internally for years.</p>
+<p>Kubernetes is <strong>declarative</strong>: you don't say what to do, you state what you want ("three copies of this image on this port with this much memory") and <strong>controllers</strong> keep comparing what you asked for with what exists and close the gap.</p>
+<figure class="anim" id="fig-reconcile">
+  <figcaption class="anim-title">The reconcile loop</figcaption>
+</figure>
+<div class="table-wrap"><table>
+  <thead><tr><th>Object</th><th>What it is</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Pod</strong></td><td>One or more containers scheduled together, sharing a network namespace and volumes; usually just yours, sometimes with a helper (a log shipper, a proxy). Gets its own IP; mortal. Grouped by <strong>labels</strong> such as <code>app=api</code>.</td></tr>
+    <tr><td><strong>ReplicaSet</strong></td><td>Keeps N pods from a template running.</td></tr>
+    <tr><td><strong>Deployment</strong></td><td>Owns ReplicaSets: a new template means a new ReplicaSet and a gradual shift of counts. This is what you write.</td></tr>
+    <tr><td><strong>Service</strong></td><td>A stable virtual IP and DNS name in front of whichever pods match its selector.</td></tr>
+    <tr><td><strong>Ingress / Gateway API</strong></td><td>Maps hostnames and paths from the internet to services, programming a real load balancer.</td></tr>
+    <tr><td><strong>ConfigMap / Secret</strong></td><td>Configuration as env vars or files; Secrets only go to pods that ask for them.</td></tr>
+  </tbody>
+</table></div>
+<p>Behind the scenes: the <strong>API server</strong> (the only component that talks to the <strong>etcd</strong> store), the <strong>scheduler</strong> (picks a machine for each new pod), the <strong>controller manager</strong> (built-in reconcile loops), and on every machine a <strong>kubelet</strong> (runs what the API server says should run there) and <strong>kube-proxy</strong> (service networking). Each container declares resource <strong>requests</strong> (reserved for it) and <strong>limits</strong> (hard caps, written into those cgroup files).</p>
+<h3>Rolling updates and probes</h3>
+<figure class="anim" data-steps id="fig-rolling">
+  <figcaption class="anim-title">Rolling update: 3 replicas, maxSurge 25% (1 pod), maxUnavailable 25% (0 pods)</figcaption>
+  <div class="frame" data-note="Version 1 serves all traffic from three ready pods.">
+    <div class="gsched"><div class="m"><b>ReplicaSet v1</b><span class="g">v1 ready</span><span class="g">v1 ready</span><span class="g">v1 ready</span></div><div class="m"><b>ReplicaSet v2</b><span class="small muted">0 pods</span></div></div>
+  </div>
+  <div class="frame" data-note="A new image is set. The Deployment creates ReplicaSet v2 and adds one pod above the desired count (maxSurge). It gets no traffic until its readiness probe passes.">
+    <div class="gsched"><div class="m"><b>ReplicaSet v1</b><span class="g">v1 ready</span><span class="g">v1 ready</span><span class="g">v1 ready</span></div><div class="m"><b>ReplicaSet v2</b><span class="g park">v2 starting · not ready</span></div></div>
+  </div>
+  <div class="frame" data-note="v2 is ready and joins the Service, so one v1 pod terminates (gracefully, lesson 19). For a while, both versions serve traffic.">
+    <div class="gsched"><div class="m"><b>ReplicaSet v1</b><span class="g done">v1 terminating</span><span class="g">v1 ready</span><span class="g">v1 ready</span></div><div class="m"><b>ReplicaSet v2</b><span class="g run">v2 ready</span><span class="g park">v2 starting</span></div></div>
+  </div>
+  <div class="frame" data-note="Repeat until v2 has three ready pods. ReplicaSet v1 is kept at zero replicas, not deleted, so rolling back is instant. A broken image can only stall the rollout, never take the service down.">
+    <div class="gsched"><div class="m"><b>ReplicaSet v1</b><span class="small muted">0 pods (kept for rollback)</span></div><div class="m"><b>ReplicaSet v2</b><span class="g run">v2 ready</span><span class="g run">v2 ready</span><span class="g run">v2 ready</span></div></div>
+  </div>
+</figure>
+<div class="cards">
+  <div class="card"><h4>Readiness probe</h4><p>Can this pod serve traffic right now? Failing removes it from the Service's endpoints, with no restart.</p></div>
+  <div class="card"><h4>Liveness probe</h4><p>Is the process stuck? Failing repeatedly makes the kubelet restart the container.</p></div>
+  <div class="card"><h4>Startup probe</h4><p>Holds the other two off until a slow-starting process has finished booting.</p></div>
+</div>
+<aside class="callout warn"><div class="tag">Never check the database in liveness</div><p>The database gets slow, liveness checks time out, and the kubelet restarts perfectly healthy pods in waves; the reconnect storm makes the database slower still. Liveness asks "is the process stuck?"; readiness asks "can I serve right now?"</p></aside>
+<p>Scaling becomes changing a number: set <code>replicas: 10</code> and the controller adds seven pods. A <strong>HorizontalPodAutoscaler</strong> changes it for you based on average CPU, within a minimum and maximum. Do you <em>need</em> Kubernetes? Usually not at first. Start small (one machine with systemd or Docker Compose, a hosting platform, or a few machines with Kamal) and adopt Kubernetes when you've earned it.</p>
+
+<h2 id="delivery">Shipping safely</h2>
+<p><strong>Continuous delivery</strong> means every merged change passes the full pipeline, so main is always deployable at the press of a button: a technical property. <strong>Continuous deployment</strong> removes the button: every change that passes ships automatically. That's a business decision; a team with continuous delivery may still release weekly for changelogs or compliance. You can't have continuous deployment without continuous delivery.</p>
+<figure class="anim" id="fig-strat">
+  <figcaption class="anim-title">Try it: deployment strategies, step by step</figcaption>
+  <div class="widget">
+    <div class="row presets" id="st-btns"><button type="button" data-s="recreate">Recreate</button><button type="button" data-s="rolling">Rolling</button><button type="button" data-s="bluegreen">Blue-green</button><button type="button" data-s="canary">Canary</button></div>
+    <div id="st-bars"></div>
+    <div class="legend" style="padding:6px 0 0"><span><i style="background:var(--faint)"></i>old version</span><span><i style="background:var(--accent)"></i>new version</span><span><i style="background:var(--bad)"></i>nothing serving</span></div>
+    <div class="tiles" id="st-tiles"></div>
+    <div class="out" id="st-out"></div>
+  </div>
+</figure>
+<p><strong>Progressive delivery</strong> automates the canary: a controller widens traffic on a schedule, compares error rates and latency at each step as a human would, and rolls back on its own if the numbers go bad.</p>
+<h3>GitOps</h3>
+<p>Instead of a pipeline pushing into the cluster, <strong>GitOps</strong> declares the cluster's entire desired state (Deployments, Services, ConfigMaps) in files in Git, where every change is versioned, reviewed and reversible. An agent in the cluster (<strong>Argo CD</strong> or <strong>Flux</strong>) pulls those files, applies them, and reverts any manual change that drifts from them. A deploy becomes a pull request that bumps an image digest, and the pipeline never holds cluster credentials, because it only pushes images and opens PRs.</p>
+<p>Environments (development, staging, production) run the same image with different config (lesson 27). Two terms you'll hear: <strong>preview environments</strong>, created per pull request for live review and destroyed on merge, and <strong>promotion</strong>, moving the same artifact from one environment to the next, often through a human approval gate.</p>
+
+<h2 id="iac">Infrastructure as code</h2>
+<p>The test: with a brand-new cloud account and one hour, could you rebuild your infrastructure <em>identically</em>, with every machine, network, load balancer, DNS record and security group? If it was clicked together in a console, probably not, especially if the person who did it has left. <strong>Infrastructure as code</strong> puts it all in version-controlled files that a tool applies, producing the same result every time.</p>
+<div class="cards">
+  <div class="card"><h4>Provisioning</h4><p>Creates machines, networks and cloud services: <strong>Terraform</strong>, or its open-source fork <strong>OpenTofu</strong> after Terraform's licence change. Write blocks, review the <code>plan</code>, <code>apply</code>.</p></div>
+  <div class="card"><h4>Configuration management</h4><p>Installs and configures software on existing machines from scripts: <strong>Ansible</strong>.</p></div>
+  <div class="card"><h4>Image baking</h4><p>Builds machine images with everything preinstalled: <strong>Packer</strong>, with <strong>cloud-init</strong> for first-boot scripts.</p></div>
+</div>
+<div class="split">
+<pre><span class="k">resource</span> <span class="s">"aws_security_group"</span> <span class="s">"api"</span> {
+  name = <span class="s">"tasker-api"</span>
+  <span class="k">ingress</span> {
+    from_port   = <span class="n">443</span>
+    to_port     = <span class="n">443</span>
+    protocol    = <span class="s">"tcp"</span>
+    cidr_blocks = [<span class="s">"0.0.0.0/0"</span>]
+  }
+}</pre>
+<pre>$ terraform plan
+<span class="c"># someone opened port 22 in the console during an incident…</span>
+  <span class="e">~ resource "aws_security_group" "api" {
+      - ingress {
+          - from_port = 22 … cidr_blocks = ["0.0.0.0/0"]
+        }
+    }</span>
+Plan: 0 to add, 1 to change, 0 to destroy.</pre>
+</div>
+<p>Terraform's <strong>state</strong> file maps each block to a real resource ID. Each run compares code, state and the cloud's reality to compute the plan. Lose the state and Terraform thinks nothing exists and plans to create everything again; two people with separate copies overwrite each other. So keep state in a <strong>remote, locked, encrypted</strong> backend, never in Git, because it contains every attribute, secrets included. Manual console changes cause <strong>drift</strong>: the next apply removes them, because the code is the source of truth.</p>
+
+<h2 id="operations">Operations: promises, budgets and incidents</h2>
+<p>Users don't care how automated your pipeline is; they care whether the service works. An <strong>SLI</strong> (service level indicator) measures that: the share of requests that succeed, or that finish within 300 ms. An <strong>SLO</strong> (objective) is a target over a window: 99.9% of requests succeed over 30 days. An <strong>SLA</strong> (agreement) is a contract that puts money behind it, such as refunds or credits if you miss.</p>
+<figure class="anim" id="fig-nines">
+  <figcaption class="anim-title">Try it: what each extra nine costs</figcaption>
+  <div class="widget">
+    <div class="row presets" id="nn-btns"><button type="button" data-n="99">99%</button><button type="button" data-n="99.9">99.9%</button><button type="button" data-n="99.95">99.95%</button><button type="button" data-n="99.99">99.99%</button><button type="button" data-n="99.999">99.999%</button></div>
+    <div class="tiles" id="nn-tiles"></div>
+    <p class="small muted" style="margin:6px 0 0">Every extra nine promises ten times less failure.</p>
+  </div>
+</figure>
+<p>The allowed failure is your <strong>error budget</strong>. While budget remains, ship as fast as you like, and spend it on deploys, maintenance, experiments and risky migrations. Blow it on the 23rd of the month and deploys freeze until it recovers, with all effort going to reliability.</p>
+<div class="cards">
+  <div class="card"><h4>On-call</h4><p>One engineer per week (plus a backup) is <strong>paged</strong> when an alert fires (lesson 18). "Paging" outlives the pagers; today it's an incident-management app on your phone.</p></div>
+  <div class="card"><h4>Incident response</h4><p>An <strong>incident commander</strong> coordinates without fixing; engineers fix; a <strong>communicator</strong> updates the status page and management. A running document records the timeline. <strong>Mitigate first</strong>: roll back, flip the feature flag off. Find the root cause afterwards.</p></div>
+  <div class="card"><h4>Blameless postmortems</h4><p>Timeline, impact, root cause and actions. Cloudflare's November 2025 outage write-up: a database permission change made a query return duplicate rows, a config file doubled in size and hit a size limit in the software reading it. No one is named. Blame people and you never learn <em>why</em> the wrong command looked right.</p></div>
+</div>
+<p>Recurring principles in postmortems: <strong>design for failure</strong> (every machine and dependency will eventually fail), <strong>keep deploys simple</strong> (files and pipelines, not hand-run steps) and <strong>make one change at a time</strong>. <strong>Chaos engineering</strong> goes further and causes failures on purpose: kill a pod during business hours and watch the ReplicaSet replace it, drain a machine, inject latency into a dependency. Better to discover a broken safety net in an experiment than in an outage.</p>
+
+<h2 id="supply-chain">The software supply chain</h2>
+<p>Most of what's in your image isn't your code: the base image, the runtime, hundreds of packages from <code>npm install</code> or <code>go mod download</code>. Dependencies can <strong>vanish or change</strong> and break thousands of builds, or be <strong>poisoned</strong>. In 2024, the xz compression library used across Linux shipped a backdoor hidden in its release tarball rather than in the source repository, so code reviewers never saw it. Defences: <strong>pin</strong> every dependency and base image to exact versions (and lockfiles), and <strong>scan</strong> continuously against published vulnerability databases.</p>
+<aside class="callout ok"><div class="tag">Course complete</div><p>This lesson isn't a DevOps course; that would take dozens of videos. It's a map, so that when you meet these terms in documentation or at work, you know where they fit. That's the spirit of the whole course: first principles and mental models, so you can go deeper on any topic yourself.</p></aside>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>DevOps makes deploying small, cheap and boring. DORA shows the fastest teams are also the most stable: deploy small changes often.</li>
+  <li>Merge to a shared trunk daily, hide unfinished work behind flags, build reproducibly, and run cheap pipeline stages first. Prefer OIDC to stored cloud keys; version services by commit hash.</li>
+  <li>A container is a process with namespaces (what it sees), cgroups (what it uses) and layered filesystems; images are content-addressed layers shipped through registries.</li>
+  <li>Order Dockerfiles for caching, use multi-stage builds, and keep images small, single-process, non-root, pinned and scanned.</li>
+  <li>Run services with a supervisor, a TLS-terminating proxy (ACME certificates) and logs; treat servers as cattle. Kubernetes reconciles desired state with pods, Deployments, Services, probes and rolling updates; adopt it when you need it.</li>
+  <li>Choose a strategy (rolling, blue-green, canary) deliberately; GitOps keeps the cluster equal to Git; Terraform keeps infrastructure equal to code, with remote, locked state.</li>
+  <li>Define SLIs and SLOs, spend the error budget wisely, mitigate before diagnosing, write blameless postmortems, test your safety nets with chaos, and pin and scan your supply chain.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Your team deploys monthly "to be safe" and each release is painful. What does DORA's research suggest?</summary><div><p>Deploy smaller changes more often. Large batches make failures more likely and much harder to diagnose (which of 200 commits?), while small, frequent deploys are easier to verify, attribute and roll back. Speed and stability improve together.</p></div></details>
+  <details><summary>Is a container a lightweight VM?</summary><div><p>No. A VM runs its own kernel on virtualized hardware. A container is an ordinary host process that the host kernel isolates with namespaces (what it sees) and limits with cgroups (what it uses), on a layered filesystem.</p></div></details>
+  <details><summary>Every code change makes your Docker build reinstall all dependencies. Why?</summary><div><p>The Dockerfile copies the whole source tree before installing dependencies, so any change invalidates that layer and everything after it. Copy only the dependency manifest and lockfile, install, then copy the source.</p></div></details>
+  <details><summary>During a slow-database incident, all your pods restart in waves. What's misconfigured?</summary><div><p>The liveness probe depends on the database. Liveness should only detect a stuck process; put dependency checks (if anywhere) in readiness, which removes a pod from traffic without restarting it.</p></div></details>
+  <details><summary>You need zero downtime and can't have two versions serving at once. Which strategy?</summary><div><p>Blue-green: deploy the new version to an idle environment, test it, then switch all traffic at once, keeping the old environment for instant rollback, at the cost of running double infrastructure meanwhile.</p></div></details>
+  <details><summary>What does a 99.9% monthly availability SLO allow?</summary><div><p>About 43 minutes of failure per 30 days. That's your error budget.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+(function () {
+  var D = [1, 4, 20, 100, 200], r = document.getElementById("bt-r");
+  function render() {
+    var d = D[+r.value], per = Math.max(1, Math.round(200 / d)), ageH = 720 / d;
+    document.getElementById("bt-v").textContent = d === 1 ? "1 (monthly)" : d === 4 ? "4 (weekly)" : d === 20 ? "20 (daily)" : d === 100 ? "100" : "200 (every commit)";
+    var age = ageH >= 48 ? Math.round(ageH / 24) + " days" : Math.round(ageH * 10) / 10 + " hours";
+    document.getElementById("bt-tiles").innerHTML = '<div class="tile ' + (per > 20 ? "bad" : per > 3 ? "warn" : "ok") + '"><small>Commits per deploy</small><b>' + per + '</b></div><div class="tile ' + (per > 20 ? "bad" : per > 3 ? "warn" : "ok") + '"><small>Suspects when it breaks</small><b>' + per + '</b></div><div class="tile ' + (ageH > 72 ? "bad" : ageH > 12 ? "warn" : "ok") + '"><small>Oldest change in the deploy</small><b>' + age + "</b></div>";
+    document.getElementById("bt-out").innerHTML = per > 20 ? "When it breaks, someone spends a day bisecting " + per + " commits from 10 people, most of whom have forgotten the details. The fix ships in the next big batch." : per > 1 ? "A handful of changes per deploy: failures are much easier to attribute." : "One change per deploy: if it breaks, you know exactly which change did it, and its author wrote it an hour ago.";
+  }
+  r.addEventListener("input", render); render();
+})();
+
+BD.seq("#fig-oidc", {
+  actors: ["GitHub Actions job", "GitHub OIDC provider", "AWS (STS)"],
+  colW: 210, rowH: 40, pad: 90,
+  steps: [
+    { from: 0, to: 1, label: "request ID token", note: "The job starts and asks GitHub's identity provider for a token." },
+    { from: 1, to: 0, label: "signed JWT: repo=acme/tasker, ref=main, workflow=deploy", ret: true, note: "GitHub issues a short-lived, signed token whose claims say which repository, branch and workflow this job belongs to." },
+    { from: 0, to: 2, label: "AssumeRoleWithWebIdentity(token)", note: "The job presents it to AWS." },
+    { from: 2, to: 2, label: "verify signature · trust only acme/tasker on main", note: "AWS was configured to trust GitHub-signed tokens only with these claims. It checks the signature and the repo and branch." },
+    { from: 2, to: 0, label: "temporary credentials (expire with the job)", ret: true, tone: "ok", note: "It returns credentials that expire shortly after the job ends. Nothing long-lived is stored anywhere to leak." }
+  ]
+});
+
+(function () {
+  var BAD = [["FROM golang:1.23", 0, "base"], ["WORKDIR /app", 0, "base"], ["COPY . .", 1, "src"], ["RUN go mod download", 45, "dep"], ["RUN go build -o /server .", 20, "build"]];
+  var GOOD = [["FROM golang:1.23", 0, "base"], ["WORKDIR /app", 0, "base"], ["COPY go.mod go.sum ./", 1, "mod"], ["RUN go mod download", 45, "dep"], ["COPY . .", 1, "src"], ["RUN go build -o /server .", 20, "build"]];
+  var c = "code";
+  function changed(kind) { return kind === "src" || (kind === "mod" && c === "dep"); }
+  function col(title, steps) {
+    var broken = false, total = 0, rows = steps.map(function (s) {
+      if (!broken && changed(s[2])) broken = true;
+      if (broken) total += s[1];
+      return '<div class="cache-row ' + (broken ? "re" : "hit") + '"><code>' + s[0] + "</code><span>" + (broken ? "rebuilt" + (s[1] ? " · " + s[1] + " s" : "") : "cached") + "</span></div>";
+    }).join("");
+    return '<div class="card"><h4>' + title + ' <span class="chip ' + (total > 30 ? "bad" : "ok") + '">' + total + " s</span></h4>" + rows + "</div>";
+  }
+  function render() {
+    document.getElementById("ca-out").innerHTML = col("Source copied first", BAD) + col("Manifest copied first", GOOD);
+    Array.prototype.forEach.call(document.querySelectorAll("#ca-change button"), function (b) { var on = b.getAttribute("data-c") === c; b.style.borderColor = on ? "var(--accent)" : ""; b.style.color = on ? "var(--accent)" : ""; });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("#ca-change button"), function (b) { b.addEventListener("click", function () { c = b.getAttribute("data-c"); render(); }); });
+  render();
+})();
+
+BD.flow("#fig-run", {
+  w: 720, h: 230,
+  nodes: {
+    cli: { x: 70, y: 70, label: "docker", sub: "CLI", kind: "client", w: 110 },
+    dd: { x: 230, y: 70, label: "dockerd", sub: "daemon", kind: "server", w: 120 },
+    cd: { x: 400, y: 70, label: "containerd", sub: "", kind: "server", w: 140 },
+    rc: { x: 590, y: 70, label: "runc", sub: "", kind: "net", w: 130 },
+    k8s: { x: 400, y: 185, label: "Kubernetes kubelet", sub: "via CRI, no Docker", kind: "client", w: 180 },
+    ct: { x: 590, y: 185, label: "Container", sub: "", kind: "queue", w: 130 }
+  },
+  edges: [["cli", "dd"], ["dd", "cd"], ["cd", "rc"], ["k8s", "cd"], ["rc", "ct"]],
+  steps: [
+    { path: ["cli", "dd"], dim: ["k8s"], packet: "run", note: "The <code>docker</code> command is just a client. It talks over a socket to the <b>dockerd</b> daemon…" },
+    { path: ["dd", "cd"], dim: ["k8s"], set: { cd: "pull layers · overlay mount" }, note: "…which hands the job to <b>containerd</b>: it manages images and container lifecycles, pulling layers and setting up the OverlayFS mount." },
+    { path: ["cd", "rc", "ct"], tone: "ok", ok: ["ct"], dim: ["k8s"], set: { cd: "pull layers · overlay mount", rc: "clone · cgroups · exec", ct: "running" }, note: "<b>runc</b> reads a JSON spec and makes the real system calls (<code>clone</code>/<code>unshare</code>), writes the cgroup files, switches the root and execs your process. Then it exits, leaving a tiny shim as the parent." },
+    { path: ["k8s", "cd", "rc"], fresh: true, set: { k8s: "via CRI, no Docker", rc: "same syscalls" }, note: "The <b>Open Container Initiative</b> standardizes image format, runtime spec and registry distribution. That's why an image built with Docker runs on Kubernetes, which talks to containerd directly through the CRI." }
+  ]
+});
+
+BD.seq("#fig-acme", {
+  actors: ["Your server (ACME client)", "Let's Encrypt"],
+  colW: 330, rowH: 40, pad: 110,
+  steps: [
+    { from: 0, to: 1, label: "new key · order cert for api.tasker.app", note: "The client generates a key and asks for a certificate for the domain." },
+    { from: 1, to: 0, label: "challenge: serve this token on :80 (or a DNS record)", ret: true, note: "Prove you control it: put a random token at a URL on port 80, or publish it as a DNS record." },
+    { from: 0, to: 0, label: "publish the token", note: "The client does so." },
+    { from: 1, to: 0, label: "fetch token from several vantage points", note: "Let's Encrypt fetches the token from multiple places on the internet, so one hijacked network path can't fool it." },
+    { from: 0, to: 1, label: "certificate signing request", note: "Satisfied, it accepts a signing request…" },
+    { from: 1, to: 0, label: "certificate, valid 90 days", ret: true, tone: "ok", note: "…and returns a certificate valid for 90 days. Clients renew automatically around day 60, so a stolen key is only useful for weeks. Caddy does all of this by itself." }
+  ]
+});
+
+BD.flow("#fig-reconcile", {
+  w: 720, h: 280,
+  nodes: {
+    you: { x: 80, y: 70, label: "You / Git", sub: "replicas: 3", kind: "client", w: 130 },
+    api: { x: 290, y: 70, label: "API server", sub: "etcd", kind: "db", w: 150 },
+    ctl: { x: 290, y: 210, label: "Controllers", sub: "+ scheduler", kind: "net", w: 150 },
+    n1: { x: 560, y: 45, label: "Node 1", sub: "kubelet", kind: "server", w: 150 },
+    n2: { x: 560, y: 140, label: "Node 2", sub: "kubelet", kind: "server", w: 150 },
+    n3: { x: 560, y: 235, label: "Node 3", sub: "kubelet", kind: "server", w: 150 }
+  },
+  edges: [["you", "api"], ["api", "ctl"], ["api", "n1"], ["api", "n2"], ["api", "n3"]],
+  steps: [
+    { path: ["you", "api"], packet: "desired state", set: { api: "want 3 · have 0" }, note: "You submit desired state: three replicas of this image. The API server stores it in etcd." },
+    { path: [["api", "ctl"], ["api", "n1"], ["api", "n2"], ["api", "n3"]], ok: ["n1", "n2", "n3"], set: { api: "want 3 · have 3", n1: "pod a", n2: "pod b", n3: "pod c" }, note: "Controllers notice the gap, the scheduler picks a node for each pod, and each kubelet starts what it's told to run." },
+    { bad: ["n2"], set: { api: "want 3 · have 2", n1: "pod a", n2: "node died ✕", n3: "pod c" }, note: "Node 2 dies. Nobody gets paged for this: the count simply no longer matches." },
+    { path: ["api", "n3"], ok: ["n1", "n3"], bad: ["n2"], set: { api: "want 3 · have 3", n1: "pod a", n2: "node died ✕", n3: "pod c · pod d" }, note: "The controller sees 2 ≠ 3 and creates a replacement, scheduled on node 3. Compare what's wanted with what exists, close the gap, forever." }
+  ]
+});
+
+(function () {
+  var S = {
+    recreate: { steps: [0, -1, -1, 100, 100, 100], both: "No", cost: "1×", roll: "Redeploy old", note: "Stop everything old, start everything new. Simple, but the gap in between is <b>downtime</b>: blank pages and errors." },
+    rolling: { steps: [0, 33, 67, 100, 100, 100], both: "Yes, during the rollout", cost: "~1× (+1 surge pod)", roll: "Old ReplicaSet kept", note: "Kubernetes' default: replace pods one at a time, gated by readiness. Zero downtime, but requests can hit <b>either version</b> mid-rollout, so the versions must be compatible." },
+    bluegreen: { steps: [0, 0, 0, 100, 100, 100], both: "No", cost: "2× while both exist", roll: "Instant: switch back", note: "Green (new) is deployed and tested with no user traffic, then the router switches everything at once. Blue stays on standby for instant rollback. The price: double infrastructure." },
+    canary: { steps: [0, 10, 20, 50, 75, 100], both: "Yes, by design", cost: "~1×", roll: "Route traffic back", note: "Send 10% of traffic to the new version, compare error rate and latency with the old pods, then widen to 20%, 50%, 75%, 100%. Problems reach a fraction of users and are rolled back early." }
+  };
+  var cur = "rolling";
+  function render() {
+    var s = S[cur];
+    document.getElementById("st-bars").innerHTML = s.steps.map(function (v, i) {
+      var bar = v < 0 ? '<span class="down" style="width:100%">nothing serving</span>' : '<span class="old" style="width:' + (100 - v) + '%"></span><span class="new" style="width:' + v + '%">' + (v ? v + "%" : "") + "</span>";
+      return '<div class="st-row"><b>t' + i + '</b><div class="st-bar">' + bar + "</div></div>";
+    }).join("");
+    document.getElementById("st-tiles").innerHTML = '<div class="tile ' + (cur === "recreate" ? "bad" : "ok") + '"><small>Downtime</small><b>' + (cur === "recreate" ? "Yes" : "None") + '</b></div><div class="tile"><small>Two versions live</small><b style="font-size:16px">' + s.both + '</b></div><div class="tile ' + (cur === "bluegreen" ? "warn" : "") + '"><small>Infrastructure cost</small><b style="font-size:16px">' + s.cost + '</b></div><div class="tile"><small>Rollback</small><b style="font-size:16px">' + s.roll + "</b></div>";
+    document.getElementById("st-out").innerHTML = s.note;
+    Array.prototype.forEach.call(document.querySelectorAll("#st-btns button"), function (b) { var on = b.getAttribute("data-s") === cur; b.style.borderColor = on ? "var(--accent)" : ""; b.style.color = on ? "var(--accent)" : ""; });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("#st-btns button"), function (b) { b.addEventListener("click", function () { cur = b.getAttribute("data-s"); render(); }); });
+  render();
+})();
+
+(function () {
+  var cur = 99.9;
+  function dur(min) { return min >= 1440 ? (min / 1440).toFixed(1) + " days" : min >= 90 ? (min / 60).toFixed(1) + " hours" : min >= 1 ? (Math.round(min * 10) / 10) + " min" : Math.round(min * 60) + " s"; }
+  function render() {
+    var f = (100 - cur) / 100;
+    var month = 30 * 24 * 60 * f, year = 365 * 24 * 60 * f, budget = Math.round(30e6 * f);
+    document.getElementById("nn-tiles").innerHTML = '<div class="tile"><small>Allowed downtime / 30 days</small><b>' + dur(month) + '</b></div><div class="tile"><small>Allowed downtime / year</small><b>' + dur(year) + '</b></div><div class="tile"><small>Failed requests allowed (1M/day)</small><b>' + budget.toLocaleString("en-US") + "</b></div>";
+    Array.prototype.forEach.call(document.querySelectorAll("#nn-btns button"), function (b) { var on = +b.getAttribute("data-n") === cur; b.style.borderColor = on ? "var(--accent)" : ""; b.style.color = on ? "var(--accent)" : ""; });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("#nn-btns button"), function (b) { b.addEventListener("click", function () { cur = +b.getAttribute("data-n"); render(); }); });
+  render();
+})();
+</script>
+</body>
+</html>

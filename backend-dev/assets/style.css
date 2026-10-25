@@ -574,3 +574,28 @@ pre mark { background: var(--accent-soft); color: inherit; border-radius: 4px; p
 .hm-step span { min-width: 0; overflow-wrap: anywhere; }
 .hm-step.ok b { color: var(--ok); }
 .hm-step.bad b { color: var(--bad); }
+.stack-cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.stack-cmp h5 { grid-column: 1 / -1; margin: 0 0 4px; font-size: 12px; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); }
+.stack-cmp > div { border-radius: 8px; padding: 8px 6px; text-align: center; font-size: 12.5px; font-weight: 600; color: var(--text); }
+.stack-cmp .app { background: var(--accent-soft); color: var(--accent); }
+.stack-cmp .os { background: color-mix(in srgb, var(--warn) 18%, var(--surface)); height: 54px; display: grid; place-items: center; }
+.stack-cmp .ct { background: color-mix(in srgb, var(--ok) 14%, var(--surface)); font-weight: 500; font-size: 11.5px; }
+.stack-cmp .hv, .stack-cmp .hw { grid-column: 1 / -1; background: var(--surface-2); }
+.layers { display: grid; gap: 6px; padding: 14px 16px; }
+.layers .ly { border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; font-size: 13.5px; background: var(--surface-2); overflow: hidden; }
+.layers .ly span { float: right; margin-left: 10px; color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.layers .ly.up { border-style: dashed; background: var(--surface); }
+.layers .ly.hit { border-color: var(--accent); background: var(--accent-soft); }
+.layers .ly.gone { border-color: var(--bad); background: var(--bad-soft); text-decoration: line-through; }
+.cache-row { display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 7px; margin-top: 5px; font-size: 12.5px; align-items: center; }
+.cache-row code { font-size: 12px; background: transparent; padding: 0; overflow-wrap: anywhere; }
+.cache-row span { white-space: nowrap; font-weight: 600; }
+.cache-row.hit { background: var(--ok-soft); } .cache-row.hit span { color: var(--ok); }
+.cache-row.re { background: var(--bad-soft); } .cache-row.re span { color: var(--bad); }
+.st-row { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 8px; align-items: center; margin: 5px 0; }
+.st-row b { font: 600 12px var(--mono); color: var(--muted); }
+.st-bar { display: flex; height: 26px; border-radius: 7px; overflow: hidden; background: var(--surface-2); gap: 2px; }
+.st-bar span { display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: #fff; transition: width .4s ease; }
+.st-bar .old { background: var(--faint); }
+.st-bar .new { background: var(--accent); }
+.st-bar .down { background: var(--bad); }
