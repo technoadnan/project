@@ -475,3 +475,20 @@ pre mark { background: var(--accent-soft); color: inherit; border-radius: 4px; p
 .memory .bar { height: 26px; border-radius: 7px; background: var(--accent); opacity: .85; display: flex; align-items: center; padding: 0 10px; color: #fff; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; }
 .memory .lvl span:last-child { color: var(--muted); font-size: 13px; }
 @media (max-width: 560px) { .memory .lvl { grid-template-columns: 80px 1fr; } .memory .lvl span:last-child { display: none; } }
+
+/* stat tiles + small charts */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 10px 0; }
+.tile { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; background: var(--surface); }
+.tile small { display: block; font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: .03em; }
+.tile b { display: block; font-size: 22px; letter-spacing: -.02em; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.tile.bad b { color: var(--bad); }
+.tile.ok b { color: var(--ok); }
+.tile.warn b { color: var(--warn); }
+.chart-axis { font: 11px var(--font); fill: var(--muted); }
+.chart-grid { stroke: var(--border); stroke-width: 1; }
+.chart-line { fill: none; stroke: var(--accent); stroke-width: 2; }
+.chart-dot { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+.flame { display: grid; gap: 2px; font: 12px var(--mono); margin: 12px 0; }
+.flame .row { display: flex; gap: 2px; }
+.flame span { display: block; padding: 5px 6px; border-radius: 4px; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.widget svg { display: block; width: 100%; height: auto; }
