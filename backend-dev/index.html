@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backend Dev · First Principles</title>
+<meta name="description" content="Visual, animated notes for backend engineering from first principles: HTTP, routing, auth, databases, caching, queues, scaling, security and more.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="spacer"></span>
+  <a class="crumb" href="../index.html">All projects</a>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+</header>
+
+<div class="wrap">
+  <section class="home-hero">
+    <div>
+      <div class="eyebrow"><span class="pill">31 lessons</span><span>Backend engineering from first principles</span></div>
+      <h1>Understand the backend, not just the framework.</h1>
+      <p class="lead">Short notes, animated diagrams and everyday analogies for every concept in the series, from a single HTTP request to scaling, security and shipping to production.</p>
+      <div class="overall"><span class="track"><i></i></span><span class="label">0 of 31 lessons complete</span></div>
+      <div class="stat-row">
+        <a class="cta" id="continue" href="lessons/01-roadmap.html">Start with lesson 1 →</a>
+      </div>
+    </div>
+    <figure class="anim" id="hero-anim">
+      <figcaption class="anim-title">One request, end to end</figcaption>
+    </figure>
+  </section>
+
+  <div class="how">
+    <div class="card"><h4><span class="dot" style="background:var(--accent)"></span>The big idea first</h4><p>Each lesson opens with the one idea that matters, then builds on it.</p></div>
+    <div class="card"><h4><span class="dot" style="background:var(--warn)"></span>Analogies where it's hard</h4><p>Abstract ideas get a familiar real-world comparison.</p></div>
+    <div class="card"><h4><span class="dot" style="background:var(--c-cache)"></span>Watch it move</h4><p>Animated diagrams you can play, pause and step through.</p></div>
+    <div class="card"><h4><span class="dot" style="background:var(--ok)"></span>Check yourself</h4><p>Takeaways and quick questions at the end of every lesson. Your progress is saved in this browser.</p></div>
+  </div>
+
+  <div id="roadmap"></div>
+
+  <footer class="site-foot">
+    These are study notes built from the <strong>Backend from First Principles</strong> video series by <strong>Sriniously</strong> on YouTube. Watch the videos for the full explanations; use these pages to revise and to see the ideas in motion.
+  </footer>
+</div>
+
+<script src="assets/lessons.js"></script>
+<script src="assets/app.js"></script>
+<script>
+BD.flow("#hero-anim", {
+  w: 720, h: 330,
+  nodes: {
+    user: { x: 80, y: 165, label: "Browser", sub: "you", kind: "client" },
+    dns: { x: 250, y: 50, label: "DNS", sub: "name → IP", kind: "net", w: 110 },
+    lb: { x: 270, y: 165, label: "Load balancer", sub: "", kind: "net", w: 132 },
+    app: { x: 450, y: 165, label: "App server", sub: "your code", kind: "server" },
+    cache: { x: 630, y: 70, label: "Cache", sub: "Redis", kind: "cache", w: 110 },
+    db: { x: 630, y: 260, label: "Database", sub: "Postgres", kind: "db", shape: "cyl", w: 116, h: 64 },
+    q: { x: 450, y: 285, label: "Queue", sub: "background jobs", kind: "queue", w: 130 }
+  },
+  edges: [["user", "dns"], ["user", "lb"], ["lb", "app"], ["app", "cache"], ["app", "db"], ["app", "q"]],
+  steps: [
+    { path: ["user", "dns", "user"], packet: "where?", hl: ["dns"], note: "<b>DNS</b> turns a name like <code>api.example.com</code> into an IP address." },
+    { path: ["user", "lb"], packet: "GET /feed", hl: ["lb"], note: "The browser sends an <b>HTTP request</b>. A load balancer receives it first." },
+    { path: ["lb", "app"], hl: ["app"], note: "It forwards the request to one healthy <b>app server</b>, where routing, auth and validation run." },
+    { path: ["app", "cache"], tone: "bad", bad: ["cache"], set: { cache: "miss" }, note: "The app checks the <b>cache</b> first. Nothing there: a cache miss." },
+    { path: ["app", "db", "app"], hl: ["db"], set: { cache: "miss" }, note: "So it asks the <b>database</b>, the source of truth." },
+    { path: ["app", "cache"], tone: "ok", ok: ["cache"], set: { cache: "stored" }, note: "It saves the answer in the cache so the next request is fast." },
+    { path: ["app", "q"], packet: "job", hl: ["q"], note: "Slow work, like sending a notification email, goes to a <b>queue</b> instead of making the user wait." },
+    { path: ["app", "lb", "user"], tone: "ok", packet: "200 OK", ok: ["user"], note: "The JSON response travels back. That round trip is what the rest of this course unpacks." }
+  ]
+});
+</script>
+</body>
+</html>

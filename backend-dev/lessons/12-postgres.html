@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Databases with Postgres · Backend Dev</title>
+<meta name="description" content="Why databases, data types, migrations, schema design, relationships, safe queries, indexes and triggers.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="12">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 12</span><span>Video · 2:45:25</span></div>
+  <h1>Mastering databases with Postgres</h1>
+  <p class="lead">A database lets data <strong>survive</strong> after the program that created it stops. A database management system adds what files can't: fast queries, structure, integrity and safe concurrent access. This lesson walks through what a backend engineer does with Postgres 80% of the time: choosing types, writing migrations, modelling relationships, writing safe queries and adding indexes.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Why disk-based databases, and why not plain text files</li><li>Relational vs document databases, and why Postgres</li><li>Data types that matter (and the <code>varchar(255)</code> myth)</li><li>Migrations, schema design, constraints and relationships</li><li>Joins, parameterized queries, pagination, triggers and indexes</li></ul></div>
+</div>
+<h2 id="why">Why databases?</h2>
+<p><strong>Persistence</strong> means data outlives the program. Close your to-do app, reopen it a week later, and your tasks are exactly as you left them. Broadly, any structured storage that supports create, read, update and delete is a "database": your phone's contact list, the browser's localStorage, even a notes text file.</p>
+<p>In backend systems, "database" means <strong>disk-based</strong> storage (HDD/SSD):</p>
+<div class="table-wrap"><table>
+  <thead><tr><th></th><th>RAM (primary memory)</th><th>Disk (secondary memory)</th></tr></thead>
+  <tbody>
+    <tr><td>Speed</td><td><strong>Very fast</strong></td><td>Slower</td></tr>
+    <tr><td>Typical size</td><td>8–128 GB</td><td>512 GB – several TB</td></tr>
+    <tr><td>Cost</td><td>Expensive</td><td><strong>Cheap</strong></td></tr>
+    <tr><td>Used by</td><td>Caches (Redis), lesson 13</td><td>Databases (Postgres, MongoDB)</td></tr>
+  </tbody>
+</table></div>
+<p>Databases need lots of space and can trade a little speed for it. Caches do the opposite.</p>
+
+<h2 id="dbms">Why a DBMS, not a text file?</h2>
+<p>A <strong>database management system</strong> stores data and gives you efficient CRUD, plus <strong>organisation</strong>, <strong>integrity</strong> (a payment amount must be a number) and <strong>security</strong> (users and roles). Early systems really did use text files, and hit three walls:</p>
+<div class="cards">
+  <div class="card"><h4>Parsing</h4><p>To find one customer, your code reads and splits every line. That's slow (especially in JS or Python) and error-prone.</p></div>
+  <div class="card"><h4>No structure</h4><p>A text file accepts anything, so there's no way to enforce "this field is a number".</p></div>
+  <div class="card"><h4>Concurrency</h4><p>Two people editing at once means one silently overwrites the other.</p></div>
+</div>
+<figure class="anim" id="fig-lost">
+  <figcaption class="anim-title">The lost update: two edits, one survivor</figcaption>
+</figure>
+
+<h2 id="types-of-db">Relational vs non-relational</h2>
+<div class="split">
+  <div class="card"><h4>Relational (Postgres, MySQL, SQL Server)</h4><p><strong>Tables, rows, columns</strong>, with a <strong>predefined schema</strong> and relationships through foreign keys, queried with SQL. Strict, so you can always trust the data's shape. Ideal for a <strong>CRM</strong>: customers, contacts and deals with strong integrity and complex queries.</p></div>
+  <div class="card"><h4>Document (MongoDB)</h4><p><strong>Collections of documents</strong>; each document can have a different shape. Fast to prototype and good for unstructured content such as a <strong>CMS</strong> (articles mixing images, code and embeds). But integrity moves into your application code, which is easier to break.</p></div>
+</div>
+<h3>Why Postgres?</h3>
+<ul>
+  <li><strong>Open source and free</strong>: self-host it anywhere.</li>
+  <li><strong>Follows the SQL standard</strong>: your SQL largely ports to other databases.</li>
+  <li><strong>Extensible</strong>: about 1,400 pages of docs and a rich extension system.</li>
+  <li><strong>Reliable and scalable</strong>.</li>
+  <li><strong>Excellent JSON support</strong> (JSONB, indexable). The main reason to reach for MongoDB, flexible data, is covered inside Postgres.</li>
+</ul>
+<p class="muted small">Not covered here: SQL basics (SELECT, GROUP BY…). There are plenty of free courses; learn those first, then come back.</p>
+
+<h2 id="data-types">Data types that matter</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Need</th><th>Use</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>Primary key</td><td><code>uuid</code> or <code>bigserial</code></td><td><code>serial</code> auto-increments; <code>bigserial</code> has more room. UUIDs are unique and URL-friendly.</td></tr>
+    <tr><td>Whole numbers</td><td><code>smallint</code> &lt; <code>integer</code> &lt; <code>bigint</code></td><td>Pick by range.</td></tr>
+    <tr><td><strong>Money, anything exact</strong></td><td><code>decimal(10,2)</code> / <code>numeric</code></td><td>10 digits in total, 2 after the point. Always exact.</td></tr>
+    <tr><td>Measurements, science</td><td><code>real</code> / <code>double precision</code></td><td>Floating point: faster, but tiny rounding differences.</td></tr>
+    <tr><td>Text</td><td><strong><code>text</code></strong></td><td>See below. Avoid <code>char(n)</code> unless values are truly fixed-length (e.g. day codes).</td></tr>
+    <tr><td>Flags</td><td><code>boolean</code></td><td></td></tr>
+    <tr><td>Time</td><td><code>timestamptz</code></td><td>Date + time + time zone. Also <code>date</code>, <code>time</code>, <code>interval</code>.</td></tr>
+    <tr><td>Flexible data</td><td><strong><code>jsonb</code></strong></td><td>Stored in Postgres's binary format: faster to query than <code>json</code> (plain text).</td></tr>
+    <tr><td>Lists, other</td><td><code>int[]</code>, <code>inet</code>, <code>point</code>, <code>xml</code>…</td><td>Arrays and specialised types, when you need them.</td></tr>
+  </tbody>
+</table></div>
+<aside class="callout warn"><div class="tag">The varchar(255) myth</div><p>In Postgres, <code>text</code> and <code>varchar(n)</code> perform the same, and the official docs recommend <code>text</code>. "255" is a habit carried over from MySQL that means nothing in Postgres, yet it makes readers hunt for a reason that doesn't exist, and changing it later needs a risky migration. Use <code>text</code> and enforce lengths in your validation layer.</p></aside>
+
+<h2 id="migrations">Migrations: version control for your schema</h2>
+<p>In production you never open a GUI and type <code>CREATE TABLE</code>. Changes go into <strong>numbered or timestamped SQL files</strong> committed with your code, and a CLI tool (dbmate, golang-migrate…) applies them in order. Each file has an <strong>up</strong> section (apply) and a <strong>down</strong> section (revert).</p>
+<figure class="anim" id="fig-migrate">
+  <figcaption class="anim-title">How a migration tool tracks state</figcaption>
+</figure>
+<p>Benefits: a full history of schema changes in Git, and <strong>rollback</strong> when something breaks. A separate <strong>seed</strong> migration fills development databases with test data.</p>
+
+<h2 id="schema">Designing the schema</h2>
+<p>Continuing the project-management example from lesson 11:</p>
+<pre><span class="k">CREATE TYPE</span> project_status <span class="k">AS ENUM</span> (<span class="s">'active'</span>, <span class="s">'completed'</span>, <span class="s">'archived'</span>);
+<span class="k">CREATE TYPE</span> task_status    <span class="k">AS ENUM</span> (<span class="s">'pending'</span>, <span class="s">'in_progress'</span>, <span class="s">'completed'</span>, <span class="s">'cancelled'</span>);
+<span class="k">CREATE TYPE</span> member_role    <span class="k">AS ENUM</span> (<span class="s">'owner'</span>, <span class="s">'admin'</span>, <span class="s">'member'</span>);
+
+<span class="k">CREATE TABLE</span> users (
+  id            uuid        <span class="k">PRIMARY KEY DEFAULT</span> gen_random_uuid(),
+  email         text        <span class="k">NOT NULL UNIQUE</span>,
+  full_name     text        <span class="k">NOT NULL</span>,
+  password_hash text        <span class="k">NOT NULL</span>,
+  created_at    timestamptz <span class="k">NOT NULL DEFAULT</span> now(),
+  updated_at    timestamptz <span class="k">NOT NULL DEFAULT</span> now()
+);
+
+<span class="k">CREATE TABLE</span> user_profiles (                <span class="c">-- one-to-one</span>
+  user_id    uuid <span class="k">PRIMARY KEY REFERENCES</span> users <span class="k">ON DELETE CASCADE</span>,
+  avatar_url text, bio text, phone text,       <span class="c">-- optional: nullable</span>
+  created_at timestamptz <span class="k">NOT NULL DEFAULT</span> now(),
+  updated_at timestamptz <span class="k">NOT NULL DEFAULT</span> now()
+);
+
+<span class="k">CREATE TABLE</span> projects (
+  id          uuid <span class="k">PRIMARY KEY DEFAULT</span> gen_random_uuid(),
+  name        text <span class="k">NOT NULL</span>,
+  description text,
+  status      project_status <span class="k">NOT NULL DEFAULT</span> <span class="s">'active'</span>,
+  owner_id    uuid <span class="k">NOT NULL REFERENCES</span> users <span class="k">ON DELETE RESTRICT</span>,
+  created_at timestamptz <span class="k">NOT NULL DEFAULT</span> now(), updated_at timestamptz <span class="k">NOT NULL DEFAULT</span> now()
+);
+
+<span class="k">CREATE TABLE</span> tasks (                        <span class="c">-- one-to-many: project → tasks</span>
+  id          uuid <span class="k">PRIMARY KEY DEFAULT</span> gen_random_uuid(),
+  project_id  uuid <span class="k">NOT NULL REFERENCES</span> projects <span class="k">ON DELETE CASCADE</span>,
+  title       text <span class="k">NOT NULL</span>,
+  priority    integer <span class="k">NOT NULL DEFAULT</span> <span class="n">1</span> <span class="k">CHECK</span> (priority <span class="k">BETWEEN</span> <span class="n">1</span> <span class="k">AND</span> <span class="n">5</span>),
+  status      task_status <span class="k">NOT NULL DEFAULT</span> <span class="s">'pending'</span>,
+  due_date    date,
+  assigned_to uuid <span class="k">REFERENCES</span> users <span class="k">ON DELETE SET NULL</span>,
+  created_at timestamptz <span class="k">NOT NULL DEFAULT</span> now(), updated_at timestamptz <span class="k">NOT NULL DEFAULT</span> now()
+);
+
+<span class="k">CREATE TABLE</span> project_members (              <span class="c">-- many-to-many linking table</span>
+  project_id uuid <span class="k">REFERENCES</span> projects <span class="k">ON DELETE CASCADE</span>,
+  user_id    uuid <span class="k">REFERENCES</span> users    <span class="k">ON DELETE CASCADE</span>,
+  role       member_role <span class="k">NOT NULL DEFAULT</span> <span class="s">'member'</span>,
+  created_at timestamptz <span class="k">NOT NULL DEFAULT</span> now(), updated_at timestamptz <span class="k">NOT NULL DEFAULT</span> now(),
+  <span class="k">PRIMARY KEY</span> (project_id, user_id)           <span class="c">-- composite key</span>
+);</pre>
+<div class="cards">
+  <div class="card"><h4>Enums</h4><p>A fixed list of allowed values. The database rejects anything else (integrity), and anyone reading the migration instantly sees the valid states (documentation).</p></div>
+  <div class="card"><h4>Primary key</h4><p>Uniquely identifies a row. It implies <code>NOT NULL</code> + <code>UNIQUE</code> and is indexed automatically.</p></div>
+  <div class="card"><h4>NOT NULL by default</h4><p>Every column is nullable unless you say otherwise. Aim for 70%+ <code>NOT NULL</code>; buggy scripts love inserting nulls.</p></div>
+  <div class="card"><h4>Naming</h4><p>Plural table names, <code>lowercase_snake_case</code> columns. Postgres folds unquoted names to lowercase, so camelCase would need quotes everywhere.</p></div>
+  <div class="card"><h4>Defaults</h4><p><code>id</code>, <code>created_at</code> and enum statuses get defaults, so the app doesn't have to send them.</p></div>
+  <div class="card"><h4>CHECK</h4><p>Custom rules such as <code>priority BETWEEN 1 AND 5</code>. A value of 55 never gets in.</p></div>
+</div>
+
+<h2 id="relationships">Relationships</h2>
+<figure class="anim" id="fig-er">
+  <figcaption class="anim-title">The three kinds of relationship</figcaption>
+</figure>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>A <strong>linking table</strong> is like a class register. Students take many classes and classes have many students, so you don't write classes inside student records or vice versa. One register line per (student, class) pair, and that pair can only appear once.</p></aside>
+<h3>Referential integrity: what happens on delete?</h3>
+<p>A foreign key already guarantees you can't reference a user who doesn't exist. <code>ON DELETE</code> rules decide what happens when the referenced row goes away:</p>
+<figure class="anim" id="fig-ondelete">
+  <figcaption class="anim-title">RESTRICT, SET NULL and CASCADE in action</figcaption>
+</figure>
+
+<h2 id="queries">Queries behind the API</h2>
+<h3>List users, with their profile embedded</h3>
+<pre><span class="k">SELECT</span> u.*, to_jsonb(up.*) <span class="k">AS</span> profile
+<span class="k">FROM</span> users u
+<span class="k">LEFT JOIN</span> user_profiles up <span class="k">ON</span> u.id = up.user_id
+<span class="k">ORDER BY</span> u.created_at <span class="k">DESC</span>;</pre>
+<ul>
+  <li>Write <code>FROM</code> first: know where the data comes from before choosing columns. Short aliases (<code>u</code>, <code>up</code>) keep it readable.</li>
+  <li><strong>LEFT JOIN</strong>, not INNER: a user who never edited their profile has no profile row, and an inner join would drop them.</li>
+  <li>Always <strong>ORDER BY</strong>. Without it, row order isn't guaranteed.</li>
+</ul>
+<h3>Get one user: parameterized queries</h3>
+<pre><span class="k">SELECT</span> u.*, to_jsonb(up.*) <span class="k">AS</span> profile
+<span class="k">FROM</span> users u <span class="k">LEFT JOIN</span> user_profiles up <span class="k">ON</span> u.id = up.user_id
+<span class="k">WHERE</span> u.id = <span class="n">$1</span>;   <span class="c">-- $1 is a slot, filled separately with the id from the URL</span></pre>
+<p>A <strong>parameter</strong> is a slot whose value is always treated as <em>data</em>, never as SQL. Building queries by gluing strings together invites <strong>SQL injection</strong>:</p>
+<figure class="anim" id="fig-sqli">
+  <figcaption class="anim-title">Try it: concatenation vs parameters</figcaption>
+  <div class="widget">
+    <div class="presets" id="sqli-presets"></div>
+    <div class="row" style="margin-top:12px"><label style="flex:1">id from the URL <input type="text" id="sqli-in" style="flex:1;font-family:var(--mono)"></label></div>
+    <div class="split">
+      <div><h5 style="color:var(--bad)">✕ String concatenation</h5><pre id="sqli-bad"></pre></div>
+      <div><h5 style="color:var(--ok)">✓ Parameterized</h5><pre id="sqli-good"></pre></div>
+    </div>
+    <p class="out" id="sqli-why" style="margin:10px 0 0"></p>
+  </div>
+</figure>
+<p>Your database driver or ORM handles parameters for you. Use them for <em>every</em> user-supplied value.</p>
+<h3>Filtering, sorting and pagination</h3>
+<pre><span class="k">SELECT</span> u.*, to_jsonb(up.*) <span class="k">AS</span> profile
+<span class="k">FROM</span> users u <span class="k">LEFT JOIN</span> user_profiles up <span class="k">ON</span> u.id = up.user_id
+<span class="k">WHERE</span> u.full_name <span class="k">ILIKE</span> <span class="n">$1</span> || <span class="s">'%'</span>      <span class="c">-- only added if ?letter= was sent; ILIKE ignores case</span>
+<span class="k">ORDER BY</span> u.email <span class="k">ASC</span>                    <span class="c">-- column + direction picked from a whitelist</span>
+<span class="k">LIMIT</span> <span class="n">$2</span> <span class="k">OFFSET</span> <span class="n">$3</span>;                     <span class="c">-- offset = (page − 1) × limit</span></pre>
+<p>Your code builds this dynamically: include the <code>WHERE</code> only if the filter was sent, default to <code>created_at DESC</code>, page 1, limit 10. Column names can't be parameters, so <strong>map <code>sortBy</code> to a fixed whitelist</strong> (<code>email</code>, <code>full_name</code>, <code>created_at</code>).</p>
+<h3>Create and update</h3>
+<pre><span class="k">INSERT INTO</span> users (email, full_name, password_hash)
+<span class="k">VALUES</span> (<span class="n">$1</span>, <span class="n">$2</span>, <span class="n">$3</span>)
+<span class="k">RETURNING</span> *;                            <span class="c">-- send the created row back in the 201 response</span>
+
+<span class="k">UPDATE</span> user_profiles
+<span class="k">SET</span> bio = <span class="n">$1</span>, phone = <span class="n">$2</span>                <span class="c">-- only the fields the PATCH actually sent</span>
+<span class="k">WHERE</span> user_id = <span class="n">$3</span>
+<span class="k">RETURNING</span> *;</pre>
+
+<h2 id="triggers">Triggers: keep <code>updated_at</code> honest</h2>
+<p>You could set <code>updated_at = now()</code> in every UPDATE from app code, and someone will forget. A <strong>trigger</strong> runs an action automatically when a condition is met:</p>
+<pre><span class="k">CREATE FUNCTION</span> set_updated_at() <span class="k">RETURNS trigger AS</span> $$
+<span class="k">BEGIN</span>
+  NEW.updated_at = now();
+  <span class="k">RETURN</span> NEW;
+<span class="k">END</span>;
+$$ <span class="k">LANGUAGE</span> plpgsql;
+
+<span class="k">CREATE TRIGGER</span> users_set_updated_at
+<span class="k">BEFORE UPDATE ON</span> users
+<span class="k">FOR EACH ROW EXECUTE FUNCTION</span> set_updated_at();   <span class="c">-- repeat for each table</span></pre>
+
+<h2 id="indexes">Indexes</h2>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>To find chapter 4 in a 100-page book, you don't flip through 50 pages: you check the <strong>index</strong> at the back, see "page 54", and jump straight there. A database index is that lookup table: <em>value → where the row lives on disk</em>.</p></aside>
+<figure class="anim" id="fig-index">
+  <figcaption class="anim-title">Sequential scan vs index lookup</figcaption>
+</figure>
+<p>Indexes can also be <strong>ordered</strong>. A list endpoint that always returns <code>ORDER BY created_at DESC</code> benefits from an index on <code>created_at DESC</code>, because rows are already in the right order.</p>
+<pre><span class="k">CREATE INDEX</span> idx_users_created_at   <span class="k">ON</span> users (created_at <span class="k">DESC</span>);
+<span class="k">CREATE INDEX</span> idx_tasks_project_id   <span class="k">ON</span> tasks (project_id);    <span class="c">-- FK used in joins</span>
+<span class="k">CREATE INDEX</span> idx_tasks_assigned_to  <span class="k">ON</span> tasks (assigned_to);   <span class="c">-- FK used in joins</span>
+<span class="k">CREATE INDEX</span> idx_tasks_status       <span class="k">ON</span> tasks (status);        <span class="c">-- WHERE status = …</span>
+<span class="k">CREATE INDEX</span> idx_members_user_id    <span class="k">ON</span> project_members (user_id);</pre>
+<div class="split">
+  <div class="card"><h4>When to index</h4><p>Columns used in <strong>JOIN</strong> conditions, <strong>WHERE</strong> clauses or <strong>ORDER BY</strong>, on queries that run often. Primary keys (and <code>UNIQUE</code> columns) are indexed automatically; <strong>foreign keys are not</strong>.</p></div>
+  <div class="card"><h4>The cost</h4><p>Every INSERT and UPDATE must also update each index. Add indexes for frequent queries, monitor, and drop the ones that don't pay off.</p></div>
+</div>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>Databases persist data on disk (cheap, large); caches use RAM (fast, small).</li>
+  <li>A DBMS solves what files can't: fast access, enforced structure, integrity and concurrency.</li>
+  <li>Default to Postgres: SQL-standard, extensible, reliable, with JSONB for flexible data.</li>
+  <li>Use <code>decimal</code> for money, <code>text</code> for strings, <code>timestamptz</code> for time, <code>jsonb</code> for JSON.</li>
+  <li>All schema changes go through migrations (up/down, tracked in a table, committed to Git).</li>
+  <li>Model 1–1 with a shared primary key, 1–N with a foreign key, N–M with a linking table and a composite key. Choose RESTRICT, CASCADE or SET NULL deliberately.</li>
+  <li>Always parameterize user input, always ORDER BY lists, and whitelist sort columns.</li>
+  <li>Index the columns behind frequent JOINs, WHERE clauses and sorts, especially foreign keys.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>You store prices as <code>real</code> and totals are off by 0.0000001. What should the type be?</summary><div><p><code>decimal(…, 2)</code> / <code>numeric</code>: exact representation for money.</p></div></details>
+  <details><summary>Users can follow many tags, and tags have many followers. How do you model that?</summary><div><p>A linking table <code>user_tags(user_id, tag_id)</code> with a composite primary key, foreign keys to both tables, and usually <code>ON DELETE CASCADE</code>.</p></div></details>
+  <details><summary>"Fetch all tasks of a project" is slow at a million tasks. First thing to check?</summary><div><p>Whether <code>tasks.project_id</code> has an index. Foreign keys aren't indexed automatically, so without one, every query is a sequential scan.</p></div></details>
+  <details><summary>Why is <code>WHERE id = '" + id + "'"</code> dangerous even if ids are "just UUIDs"?</summary><div><p>The value comes from the client, who can send anything, such as <code>x' OR '1'='1</code>. Concatenation lets that text become SQL; parameters keep it as data.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.seq("#fig-lost", {
+  actors: ["User A (+20)", "amount.txt", "User B (−20)"],
+  colW: 220,
+  steps: [
+    { from: 1, to: 0, label: "read → 40", ret: true, note: "User A reads the amount: <b>40</b>." },
+    { from: 1, to: 2, label: "read → 40", ret: true, note: "At the same moment, User B also reads <b>40</b>." },
+    { from: 0, to: 1, label: "write 60", note: "A adds 20 and saves <b>60</b>." },
+    { from: 2, to: 1, label: "write 20", tone: "bad", note: "B subtracts 20 from <i>its</i> copy (40) and saves <b>20</b>, overwriting A's change." },
+    { over: 1, text: "final: 20 (should be 40)", tone: "bad", note: "A's update is <b>lost</b>, and which one wins depends on timing. Databases prevent this with concurrency control." }
+  ]
+});
+
+BD.flow("#fig-migrate", {
+  w: 720, h: 260,
+  nodes: {
+    f1: { x: 95, y: 45, label: "001_create_users", sub: "up · down", kind: "ext", w: 160, h: 46 },
+    f2: { x: 95, y: 110, label: "002_seed_data", sub: "up · down", kind: "ext", w: 160, h: 46 },
+    f3: { x: 95, y: 175, label: "003_indexes", sub: "up · down", kind: "ext", w: 160, h: 46 },
+    f4: { x: 95, y: 235, label: "004_add_tags", sub: "new file", kind: "ext", w: 160, h: 40 },
+    tool: { x: 360, y: 140, label: "dbmate", sub: "migration CLI", kind: "server", w: 130 },
+    db: { x: 590, y: 140, label: "Postgres", sub: "schema_migrations: —", kind: "db", shape: "cyl", w: 180, h: 72 }
+  },
+  edges: [["f1", "tool"], ["f2", "tool"], ["f3", "tool"], ["f4", "tool"], ["tool", "db"]],
+  steps: [
+    { path: ["f1", "tool", "db"], packet: "up", hl: ["f1"], set: { db: "schema_migrations: 1" }, dim: ["f4"], note: "<code>dbmate up</code> applies files in order. 001 creates the tables, and the tool records version 1." },
+    { path: ["f2", "tool", "db"], packet: "up", hl: ["f2"], set: { db: "schema_migrations: 2" }, dim: ["f4"], note: "002 seeds test data → version 2." },
+    { path: ["f3", "tool", "db"], packet: "up", hl: ["f3"], set: { db: "schema_migrations: 3" }, dim: ["f4"], note: "003 adds indexes and triggers → version 3." },
+    { path: ["f4", "tool", "db"], packet: "up", hl: ["f4"], set: { db: "schema_migrations: 4" }, note: "Later you add 004. The tool sees version 3 and applies <b>only 004</b>. Re-running old files would fail (table already exists)." },
+    { path: ["db", "tool", "f4"], packet: "down", tone: "warn", warn: ["f4"], set: { db: "schema_migrations: 3" }, note: "Something broke? <code>dbmate rollback</code> runs 004's <b>down</b> section and the version returns to 3." }
+  ]
+});
+
+BD.flow("#fig-er", {
+  w: 720, h: 300,
+  nodes: {
+    users: { x: 360, y: 60, label: "users", sub: "id (PK)", kind: "db", w: 130 },
+    prof: { x: 110, y: 60, label: "user_profiles", sub: "user_id (PK + FK)", kind: "db", w: 160 },
+    proj: { x: 610, y: 60, label: "projects", sub: "id · owner_id (FK)", kind: "db", w: 160 },
+    tasks: { x: 610, y: 235, label: "tasks", sub: "project_id (FK)", kind: "db", w: 160 },
+    pm: { x: 360, y: 235, label: "project_members", sub: "PK (project_id, user_id)", kind: "queue", w: 190 }
+  },
+  edges: [["prof", "users", { label: "1 – 1" }], ["users", "proj", { label: "owns 1 – N" }], ["proj", "tasks", { label: "1 – N", dx: 22, dy: 4 }], ["users", "pm", { label: "N", dx: 12, dy: 4 }], ["proj", "pm", { label: "M", dx: -6, dy: 18 }]],
+  steps: [
+    { path: ["prof", "users"], hl: ["prof", "users"], note: "<b>One-to-one:</b> each user has at most one profile. The profile table reuses the user's id as its own primary key. Splitting it out keeps the core users table stable while profiles grow (avatar, bio, socials…)." },
+    { path: ["proj", "tasks"], hl: ["proj", "tasks"], note: "<b>One-to-many:</b> one project, many tasks. Each task stores <code>project_id</code>, a foreign key pointing at its project." },
+    { path: [["users", "pm"], ["proj", "pm"]], hl: ["users", "proj", "pm"], note: "<b>Many-to-many:</b> users join many projects, and projects have many users. A <b>linking table</b> stores one row per pair." },
+    { path: ["pm"], hl: ["pm"], set: { pm: "(proj 2, user 1) · role=admin" }, note: "Its <b>composite primary key</b> (project_id, user_id) makes each membership unique. Pair-specific facts, like the member's <b>role</b>, live here too." }
+  ]
+});
+
+BD.flow("#fig-ondelete", {
+  w: 720, h: 270,
+  nodes: {
+    ada: { x: 65, y: 135, label: "users: Ada", sub: "owner", kind: "client", w: 110 },
+    apollo: { x: 272, y: 135, label: "projects: Apollo", sub: "owner_id → Ada", kind: "server", w: 150 },
+    t1: { x: 470, y: 60, label: "tasks: T1", sub: "Apollo · Bob", kind: "db", w: 150 },
+    t2: { x: 470, y: 210, label: "tasks: T2", sub: "Apollo · Bob", kind: "db", w: 150 },
+    bob: { x: 650, y: 135, label: "users: Bob", sub: "assignee", kind: "client", w: 120 }
+  },
+  edges: [["ada", "apollo", { label: "RESTRICT" }], ["apollo", "t1", { label: "CASCADE", dx: -22 }], ["apollo", "t2", { label: "CASCADE", dx: -22, dy: 14 }], ["bob", "t1", { label: "SET NULL", dx: 26 }], ["bob", "t2", { label: "SET NULL", dx: 26, dy: 14 }]],
+  steps: [
+    { path: ["ada", "apollo"], tone: "bad", packet: "DELETE Ada", bad: ["ada"], note: "<code>DELETE</code> Ada → <b>ON DELETE RESTRICT</b> blocks it: she still owns Apollo. Error; nothing changes." },
+    { path: [["bob", "t1"], ["bob", "t2"]], tone: "warn", packet: "DELETE Bob", warn: ["t1", "t2"], dim: ["bob"], set: { bob: "deleted", t1: "assignee → NULL", t2: "assignee → NULL" }, note: "Delete Bob → <b>SET NULL</b>: his tasks survive, just unassigned." },
+    { path: [["apollo", "t1"], ["apollo", "t2"]], tone: "bad", packet: "DELETE Apollo", dim: ["bob", "t1", "t2"], bad: ["apollo"], set: { bob: "deleted", apollo: "deleted", t1: "deleted (cascade)", t2: "deleted (cascade)" }, note: "Delete Apollo → <b>CASCADE</b>: its tasks are deleted with it. No orphan tasks." },
+    { path: ["ada"], tone: "ok", dim: ["bob", "apollo", "t1", "t2"], ok: ["ada"], set: { bob: "deleted", apollo: "deleted", t1: "deleted (cascade)", t2: "deleted (cascade)", ada: "can be deleted ✓" }, note: "Ada owns nothing now, so RESTRICT no longer objects. Each rule protects integrity in a different way." }
+  ]
+});
+
+(function () {
+  var presets = [["normal id", "42"], ["always true", "x' OR '1'='1"], ["drop table", "1'; DROP TABLE users; --"]];
+  var inp = document.getElementById("sqli-in"), bad = document.getElementById("sqli-bad"), good = document.getElementById("sqli-good"), why = document.getElementById("sqli-why");
+  presets.forEach(function (p) {
+    var b = document.createElement("button"); b.type = "button"; b.textContent = p[0];
+    b.addEventListener("click", function () { inp.value = p[1]; render(); });
+    document.getElementById("sqli-presets").appendChild(b);
+  });
+  function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+  function render() {
+    var v = inp.value;
+    bad.innerHTML = "SELECT * FROM users\nWHERE id = '<mark>" + esc(v) + "</mark>';";
+    good.innerHTML = "SELECT * FROM users\nWHERE id = $1;\n\n-- params: [" + esc(JSON.stringify(v)) + "]";
+    if (v.indexOf("'") === -1) why.innerHTML = "Harmless input looks the same both ways, which is why the bug hides until someone sends a quote.";
+    else if (/drop|delete|update|insert/i.test(v)) why.innerHTML = "<b>Concatenated:</b> the quote closes the string, <code>;</code> ends the statement and a second, destructive statement runs. <b>Parameterized:</b> the database looks for a user whose id is literally that whole string, and finds none.";
+    else if (/or/i.test(v)) why.innerHTML = "<b>Concatenated:</b> the condition becomes <code>id = 'x' OR '1'='1'</code>, which is true for every row, so the API returns <i>all</i> users. <b>Parameterized:</b> it's just an odd-looking id and matches nothing.";
+    else why.innerHTML = "The quote in your input escapes the string literal in the concatenated version, so the database now parses part of your input as SQL. The parameterized version is unaffected.";
+  }
+  inp.value = presets[1][1];
+  inp.addEventListener("input", render); render();
+})();
+
+BD.flow("#fig-index", {
+  w: 720, h: 300,
+  nodes: {
+    q: { x: 80, y: 150, label: "WHERE id = 42", kind: "client", w: 130 },
+    idx: { x: 255, y: 150, label: "Index on id", sub: "sorted lookup", kind: "cache", w: 130, h: 70 },
+    r1: { x: 420, y: 50, label: "id 17", kind: "db", w: 76, h: 40 },
+    r2: { x: 520, y: 95, label: "id 3", kind: "db", w: 76, h: 40 },
+    r3: { x: 630, y: 45, label: "id 88", kind: "db", w: 76, h: 40 },
+    r4: { x: 445, y: 160, label: "id 51", kind: "db", w: 76, h: 40 },
+    r5: { x: 560, y: 190, label: "id 9", kind: "db", w: 76, h: 40 },
+    r6: { x: 665, y: 150, label: "id 64", kind: "db", w: 76, h: 40 },
+    r7: { x: 420, y: 255, label: "id 30", kind: "db", w: 76, h: 40 },
+    r8: { x: 620, y: 260, label: "id 42", kind: "db", w: 76, h: 40 }
+  },
+  edges: [["q", "idx"]],
+  steps: [
+    { path: ["q", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8"], speed: 0.5, packet: "scan", warn: ["r1", "r2", "r3", "r4", "r5", "r6", "r7"], ok: ["r8"], note: "<b>Without an index:</b> a sequential scan visits rows wherever they sit on disk, checking each one. 8 rows is fine; 10 million is not." },
+    { path: ["q", "idx"], hl: ["idx"], set: { idx: "42 → block 7" }, note: "<b>With an index:</b> look the value up in a compact, sorted structure (a B-tree), which says where the row lives…" },
+    { path: ["idx", "r8"], tone: "ok", ok: ["r8"], set: { idx: "42 → block 7" }, note: "…then jump straight to it. Like a book's index, the cost barely grows as the table grows." }
+  ]
+});
+</script>
+</body>
+</html>

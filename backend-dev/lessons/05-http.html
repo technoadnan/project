@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HTTP · Backend Dev</title>
+<meta name="description" content="Statelessness, messages, methods, headers, CORS, status codes, caching and more.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="05">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 5</span><span>Video · 1:18:13</span></div>
+  <h1>Understanding HTTP for backend engineers</h1>
+  <p class="lead">HTTP is how browsers and servers talk. It rests on two ideas: it's <strong>stateless</strong> (every request carries everything the server needs) and it's <strong>client–server</strong> (the client always starts the conversation). Everything else, from headers and methods to CORS, status codes and caching, is built on that.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Statelessness and why it makes scaling easy</li><li>What raw request and response messages look like</li><li>Headers, methods and idempotency</li><li>How CORS and preflight requests really work</li><li>Status codes you'll use 95% of the time</li><li>Caching with ETags, content negotiation, compression, big files and TLS</li></ul></div>
+</div>
+<h2 id="stateless">Idea 1: statelessness</h2>
+<p>HTTP has <strong>no memory</strong>. After the server responds, it forgets the request. The next request from the same client is a brand-new, unrelated event. So every request must be <strong>self-contained</strong>: if the server needs to know who you are, you send your token or cookie <em>every time</em>.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>It's like a support hotline where a different agent answers every call. Nobody remembers you, so you read out your account number each time. Annoying for you, but the company can add agents freely, and if one goes home sick, nothing is lost.</p></aside>
+<figure class="anim" id="fig-stateless">
+  <figcaption class="anim-title">Self-contained requests let any server answer</figcaption>
+</figure>
+<div class="cards">
+  <div class="card"><h4>Simplicity</h4><p>No session storage on the server means less memory and less complexity.</p></div>
+  <div class="card"><h4>Scalability</h4><p>Any server can handle any request, so you can spread traffic across many machines.</p></div>
+  <div class="card"><h4>Resilience</h4><p>If a server crashes, there's no in-memory session to lose or restore.</p></div>
+</div>
+<p>When you <em>do</em> need continuity (logins, shopping carts), you layer it on top with cookies, sessions or tokens. Lesson 8 covers this.</p>
+
+<h2 id="client-server">Idea 2: client–server</h2>
+<p>There's always a client (a browser, a mobile app, another server) and a server that hosts resources and waits. <strong>The client always initiates.</strong> A server can't spontaneously send an HTTP response to someone who didn't ask. (Real-time techniques in lesson 25 work around this.)</p>
+<p class="muted small">HTTPS is HTTP plus encryption. Everything here applies to both.</p>
+
+<h2 id="versions">Under HTTP: TCP and the versions</h2>
+<p>HTTP only needs a <strong>reliable</strong> transport that doesn't silently lose messages, so it traditionally runs on <strong>TCP</strong>. Backend engineers live at layer 7 of the OSI model (the application layer). TCP handshakes and TLS belong to the network layers below, so it's worth knowing they exist without going down that rabbit hole.</p>
+<figure class="anim" id="fig-versions">
+  <figcaption class="anim-title">Fetching 3 resources: how each HTTP version uses connections</figcaption>
+</figure>
+<div class="table-wrap"><table>
+  <thead><tr><th>Version</th><th>What changed</th></tr></thead>
+  <tbody>
+    <tr><td><strong>1.0</strong></td><td>A new TCP connection for every request: open, request, response, close.</td></tr>
+    <tr><td><strong>1.1</strong></td><td><strong>Persistent connections</strong> (keep-alive by default), chunked transfer and better caching. Still one request at a time per connection.</td></tr>
+    <tr><td><strong>2</strong></td><td><strong>Multiplexing</strong>: many requests interleaved on one connection. Binary framing, HPACK header compression, server push.</td></tr>
+    <tr><td><strong>3</strong></td><td>Runs on <strong>QUIC over UDP</strong>: faster connection setup, better handling of packet loss, and no TCP head-of-line blocking.</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="messages">Anatomy of an HTTP message</h2>
+<p>A request and a response share the same shape: a start line, headers, a <strong>blank line</strong>, then an optional body.</p>
+<figure class="anim" id="fig-msg">
+  <figcaption class="anim-title">Raw request and response, part by part</figcaption>
+  <div class="msg-pad split">
+    <div><h5>Request</h5>
+<pre><span data-part="1">POST /api/notes HTTP/1.1</span>
+<span data-part="2">Host: api.example.com
+User-Agent: Mozilla/5.0
+Authorization: Bearer eyJhbGciOi…
+Content-Type: application/json
+Accept: application/json</span>
+<span data-part="3">
+{"title": "Buy milk", "done": false}</span></pre></div>
+    <div><h5>Response</h5>
+<pre><span data-part="4">HTTP/1.1 201 Created</span>
+<span data-part="5">Content-Type: application/json
+Content-Length: 46
+Cache-Control: no-cache
+</span><span data-part="6">
+{"id": 42, "title": "Buy milk", "done": false}</span></pre></div>
+  </div>
+</figure>
+
+<h2 id="headers">Headers: metadata on the outside</h2>
+<p>Headers are <strong>key–value pairs</strong> describing the message. Why not stuff this into the URL or body?</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>When you post a parcel, the address and phone number go <strong>on the outside</strong>. Every courier along the way can read them without opening the box. Headers are that label: proxies, caches, load balancers and your framework can act on them without parsing the body.</p></aside>
+<div class="tabs">
+  <div class="tab" data-label="Request">
+    <p>Sent by the client to describe itself and its preferences.</p>
+    <ul><li><code>User-Agent</code>: what's calling (browser, Postman, mobile app, another server).</li><li><code>Authorization</code>: credentials, such as a bearer token.</li><li><code>Accept</code>: which formats the client wants back (JSON, HTML…).</li></ul>
+  </div>
+  <div class="tab" data-label="General">
+    <p>Used in both directions; about the message itself.</p>
+    <ul><li><code>Date</code>: when the message was sent.</li><li><code>Cache-Control</code>: <code>no-cache</code>, <code>max-age=60</code>…</li><li><code>Connection</code>: <code>keep-alive</code> or <code>close</code>.</li></ul>
+  </div>
+  <div class="tab" data-label="Representation">
+    <p>Describe the body so the other side can interpret it.</p>
+    <ul><li><code>Content-Type</code>: media type, e.g. <code>application/json</code>.</li><li><code>Content-Length</code>: size in bytes.</li><li><code>Content-Encoding</code>: compression, e.g. <code>gzip</code>.</li><li><code>ETag</code>: a version fingerprint, used for caching.</li></ul>
+  </div>
+  <div class="tab" data-label="Security">
+    <p>Tell the browser how to behave safely.</p>
+    <ul><li><code>Strict-Transport-Security</code>: HTTPS only; prevents downgrade attacks.</li><li><code>Content-Security-Policy</code>: where scripts, styles and images may load from (blocks XSS).</li><li><code>X-Frame-Options</code>: no embedding in iframes (blocks clickjacking).</li><li><code>X-Content-Type-Options: nosniff</code>: don't guess MIME types.</li><li><code>Set-Cookie: …; HttpOnly; Secure</code>: hide cookies from JS, send them over HTTPS only.</li></ul>
+  </div>
+</div>
+<p>Two ideas make headers powerful:</p>
+<ul>
+  <li><strong>Extensibility</strong>: add a header (even a custom <code>X-Something</code>) and behaviour changes without touching the protocol.</li>
+  <li><strong>Remote control</strong>: the client steers the server: "send JSON", "in Spanish", "gzipped", "here's who I am".</li>
+</ul>
+
+<h2 id="methods">Methods: the intent of a request</h2>
+<p>The method says <em>what you intend to do</em> to a resource. It gives every request a clear meaning.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Method</th><th>Intent</th><th>Body?</th><th>Idempotent?</th></tr></thead>
+  <tbody>
+    <tr><td><code>GET</code></td><td>Fetch data. Must not change anything.</td><td>No</td><td><span class="chip ok">yes</span></td></tr>
+    <tr><td><code>POST</code></td><td>Create something / submit data.</td><td>Yes</td><td><span class="chip bad">no</span></td></tr>
+    <tr><td><code>PATCH</code></td><td>Update <em>some</em> fields (selective change).</td><td>Yes</td><td><span class="chip warn">usually</span></td></tr>
+    <tr><td><code>PUT</code></td><td><em>Replace</em> the whole resource.</td><td>Yes</td><td><span class="chip ok">yes</span></td></tr>
+    <tr><td><code>DELETE</code></td><td>Remove a resource.</td><td>Rarely</td><td><span class="chip ok">yes</span></td></tr>
+    <tr><td><code>OPTIONS</code></td><td>Ask what the server supports (CORS preflight).</td><td>No</td><td><span class="chip ok">yes</span></td></tr>
+  </tbody>
+</table></div>
+<p>Rule of thumb: <strong>use PATCH unless you really mean "replace everything"</strong>. Many APIs misuse PUT for partial updates.</p>
+<h3>Idempotency</h3>
+<p>An operation is <strong>idempotent</strong> if doing it once or ten times leaves the server in the same state. GET reads, PUT replaces with the same data, DELETE can only delete once. POST creates a <em>new</em> thing each time.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>Pressing a lift's call button five times still brings one lift: idempotent. Telling a barista "one more coffee" five times gets you five coffees: not idempotent.</p></aside>
+<figure class="anim" id="fig-idem">
+  <figcaption class="anim-title">Same request, sent twice</figcaption>
+</figure>
+
+<h2 id="cors">CORS: the browser's guest list</h2>
+<p>Browsers enforce the <strong>same-origin policy</strong>: JavaScript from <code>example.com</code> may not read responses from a different origin like <code>api.example.com</code> (a different port counts too). <strong>CORS</strong> lets the server say which other origins are allowed.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>The browser is a bouncer and the server owns the guest list. For a quick visit (a simple request), the bouncer checks the list when the answer comes back. For a big entrance with unusual demands (a preflighted request), the bouncer phones ahead first: "Do you accept PUT requests with an Authorization header from example.com?"</p></aside>
+<h3>Simple requests</h3>
+<figure class="anim" id="fig-cors-simple">
+  <figcaption class="anim-title">Simple request: checked on the way back</figcaption>
+</figure>
+<aside class="callout warn"><div class="tag">Gotcha</div><p>A CORS error doesn't mean the server didn't run your request. For simple requests, the server processes it. The <em>browser</em> just refuses to hand the response to your JavaScript. CORS protects users' browsers, not your server.</p></aside>
+<h3>When is a request preflighted?</h3>
+<p>A cross-origin request needs a preflight if <strong>any one</strong> of these is true:</p>
+<ul>
+  <li>The method isn't <code>GET</code>, <code>POST</code> or <code>HEAD</code> (for example <code>PUT</code> or <code>DELETE</code>).</li>
+  <li>It has non-simple headers, such as <code>Authorization</code> or custom headers.</li>
+  <li>Its <code>Content-Type</code> isn't form-urlencoded, multipart or text/plain. <strong><code>application/json</code> triggers a preflight</strong>, so most API calls are preflighted.</li>
+</ul>
+<figure class="anim" id="fig-cors-pre">
+  <figcaption class="anim-title">Preflighted request: OPTIONS first, then the real call</figcaption>
+</figure>
+
+<h2 id="status">Status codes: the result at a glance</h2>
+<p>A three-digit code tells the client what happened without it having to inspect the body. They're standard across every language and framework, so a client can react consistently: on <code>401</code> log the user out, on <code>400</code> highlight the form.</p>
+<div class="cards c4">
+  <div class="card"><h4><span class="k">1xx</span> Info</h4><p><code>100</code> continue (send the big body), <code>101</code> switching protocols (e.g. to WebSocket).</p></div>
+  <div class="card"><h4><span class="k">2xx</span> Success</h4><p>It worked.</p></div>
+  <div class="card"><h4><span class="k">3xx</span> Redirect</h4><p>Look elsewhere, or use your cached copy.</p></div>
+  <div class="card"><h4><span class="k">4xx</span> Client error</h4><p>The request was wrong; the client should fix it.</p></div>
+  <div class="card"><h4><span class="k">5xx</span> Server error</h4><p>The server failed; not the client's fault.</p></div>
+</div>
+<div class="table-wrap"><table>
+  <thead><tr><th>Code</th><th>Meaning</th><th>Use it when…</th></tr></thead>
+  <tbody>
+    <tr><td><span class="chip ok">200</span></td><td>OK</td><td>A successful GET or action.</td></tr>
+    <tr><td><span class="chip ok">201</span></td><td>Created</td><td>A POST created a new resource.</td></tr>
+    <tr><td><span class="chip ok">204</span></td><td>No Content</td><td>Success with nothing to return (DELETE, preflight).</td></tr>
+    <tr><td><span class="chip acc">301</span></td><td>Moved Permanently</td><td><code>/user</code> became <code>/person</code> forever; old clients get redirected.</td></tr>
+    <tr><td><span class="chip acc">302</span></td><td>Found (temporary)</td><td>Redirect for a campaign, but keep using the original URL.</td></tr>
+    <tr><td><span class="chip acc">304</span></td><td>Not Modified</td><td>"Your cached copy is still good" (conditional GET).</td></tr>
+    <tr><td><span class="chip warn">400</span></td><td>Bad Request</td><td>Invalid data: expected a number, got an array.</td></tr>
+    <tr><td><span class="chip warn">401</span></td><td>Unauthorized</td><td>No credentials, or an expired or invalid token.</td></tr>
+    <tr><td><span class="chip warn">403</span></td><td>Forbidden</td><td>Logged in but not allowed (user A deleting user B's data).</td></tr>
+    <tr><td><span class="chip warn">404</span></td><td>Not Found</td><td>Wrong URL, or the resource was deleted.</td></tr>
+    <tr><td><span class="chip warn">405</span></td><td>Method Not Allowed</td><td>PUT sent to a route that only supports GET/POST.</td></tr>
+    <tr><td><span class="chip warn">409</span></td><td>Conflict</td><td>A folder with that name already exists.</td></tr>
+    <tr><td><span class="chip warn">429</span></td><td>Too Many Requests</td><td>Rate limit exceeded.</td></tr>
+    <tr><td><span class="chip bad">500</span></td><td>Internal Server Error</td><td>An unhandled exception. Don't leak details.</td></tr>
+    <tr><td><span class="chip bad">501</span></td><td>Not Implemented</td><td>Not supported yet, may be later.</td></tr>
+    <tr><td><span class="chip bad">502</span></td><td>Bad Gateway</td><td>A proxy got an invalid response from upstream.</td></tr>
+    <tr><td><span class="chip bad">503</span></td><td>Service Unavailable</td><td>Overloaded or in maintenance; try later.</td></tr>
+    <tr><td><span class="chip bad">504</span></td><td>Gateway Timeout</td><td>A proxy got <em>no</em> response from upstream in time.</td></tr>
+  </tbody>
+</table></div>
+<aside class="callout analogy"><div class="tag">Analogy: 401 vs 403</div><p><strong>401</strong> is the receptionist saying "Who are you? Please show your badge." <strong>403</strong> is "I know exactly who you are, and you're not allowed on this floor."</p></aside>
+<figure class="anim" id="fig-gateway">
+  <figcaption class="anim-title">Where 502 and 504 come from</figcaption>
+</figure>
+
+<h2 id="caching">HTTP caching</h2>
+<p>Caching reuses a stored response instead of downloading it again: faster pages, less bandwidth, less server load. Three response headers drive it:</p>
+<ul>
+  <li><code>Cache-Control: max-age=10</code>: reuse this copy for up to 10 seconds without asking.</li>
+  <li><code>ETag: "3141"</code>: a fingerprint (usually a hash) of this version of the response.</li>
+  <li><code>Last-Modified</code>: when the resource last changed.</li>
+</ul>
+<figure class="anim" id="fig-etag">
+  <figcaption class="anim-title">Conditional requests with ETags</figcaption>
+</figure>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>Instead of asking the library to post you the whole book again, you ask: "Is there a newer edition than #3141?" Most of the time the answer is a one-word "no" (304), and you keep reading your copy.</p></aside>
+<p>In practice, keeping ETags correct is fiddly: forget to update one and clients see stale data. Many apps now cache on the client with libraries like React Query, which control exactly when to refetch. HTTP caching is still great for simple cases and static assets.</p>
+
+<h2 id="negotiation">Content negotiation and compression</h2>
+<p>The client states preferences and the server picks the best match (or a fallback):</p>
+<ul>
+  <li><strong>Media type</strong>: <code>Accept: application/json</code> or <code>application/xml</code></li>
+  <li><strong>Language</strong>: <code>Accept-Language: en</code> or <code>es</code></li>
+  <li><strong>Encoding</strong>: <code>Accept-Encoding: gzip, deflate, br, zstd</code></li>
+</ul>
+<figure class="anim" id="fig-neg">
+  <figcaption class="anim-title">Try it: change the request headers</figcaption>
+  <div class="widget">
+    <div class="row">
+      <label>Accept <select id="neg-type"><option value="json">application/json</option><option value="xml">application/xml</option></select></label>
+      <label>Accept-Language <select id="neg-lang"><option value="en">en</option><option value="es">es</option></select></label>
+      <label>Accept-Encoding <select id="neg-enc"><option value="gzip">gzip</option><option value="identity">none</option></select></label>
+    </div>
+    <div class="split">
+      <div><h5>Request</h5><pre id="neg-req"></pre></div>
+      <div><h5>Response</h5><pre id="neg-res"></pre></div>
+    </div>
+    <div style="margin-top:12px">
+      <div class="small muted" style="display:flex;justify-content:space-between"><span>Download size for 11,000 records</span><b id="neg-size"></b></div>
+      <div class="meter" id="neg-meter"><i></i></div>
+    </div>
+  </div>
+</figure>
+<p>In the video's demo, a JSON response with 11,000 entries is <strong>26 MB uncompressed but 3.8 MB with gzip</strong>. The browser decompresses it transparently, so you get the same data for about a seventh of the bandwidth.</p>
+
+<h2 id="keepalive">Persistent connections</h2>
+<p>Opening a TCP connection is slow. HTTP/1.1 keeps connections open by default so many requests can reuse one. <code>Connection: keep-alive</code> (optionally with a timeout and a max request count) asks to keep it open; <code>Connection: close</code> closes it after the response, which was the HTTP/1.0 default. The defaults are almost always fine.</p>
+
+<h2 id="large">Large requests and responses</h2>
+<div class="split">
+  <div class="card"><h4>Uploading: multipart</h4><p>Files go up as <code>multipart/form-data</code>. The body is split into parts, separated by a <strong>boundary</strong> string declared in the <code>Content-Type</code> header, so the server knows where each part starts and ends.</p></div>
+  <div class="card"><h4>Downloading: streaming</h4><p>The server sends data in chunks over one kept-alive connection (e.g. <code>Content-Type: text/event-stream</code>), and the client appends each chunk as it arrives instead of waiting for the whole thing.</p></div>
+</div>
+<pre>POST /upload HTTP/1.1
+Content-Type: multipart/form-data; <mark>boundary=----Bnd7MA4YWxk</mark>
+
+<mark>------Bnd7MA4YWxk</mark>
+Content-Disposition: form-data; name="file"; filename="cat.png"
+Content-Type: image/png
+
+‰PNG…binary bytes…
+<mark>------Bnd7MA4YWxk--</mark></pre>
+<figure class="anim" id="fig-stream">
+  <figcaption class="anim-title">Streaming a large response in chunks</figcaption>
+</figure>
+
+<h2 id="tls">SSL, TLS and HTTPS in one minute</h2>
+<div class="cards">
+  <div class="card"><h4>SSL</h4><p>The original protocol for encrypting client–server traffic. Now outdated because of security flaws.</p></div>
+  <div class="card"><h4>TLS</h4><p>Its modern replacement. Uses <strong>certificates</strong> to prove the server's identity, then encrypts data in transit. TLS 1.3 is the current recommendation.</p></div>
+  <div class="card"><h4>HTTPS</h4><p>Plain HTTP running over TLS. Same messages, but nobody in the middle can read or tamper with them.</p></div>
+</div>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>HTTP is stateless: each request carries its own auth and context, which is exactly what makes horizontal scaling easy.</li>
+  <li>The client always initiates. Messages are a start line, headers, a blank line and a body.</li>
+  <li>Headers are the parcel label: metadata every hop can read. They give HTTP its extensibility and "remote control".</li>
+  <li>Methods express intent. GET, PUT and DELETE are idempotent; POST isn't. Prefer PATCH for partial updates.</li>
+  <li>CORS is enforced by the browser. JSON bodies, auth headers and PUT/DELETE trigger an OPTIONS preflight.</li>
+  <li>Status codes are a shared language: 2xx success, 3xx redirect or cache, 4xx client mistake, 5xx server failure.</li>
+  <li>ETags plus conditional GETs give cheap 304 responses; compression and streaming handle big payloads.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Your React app sends <code>PUT /api/notes/1</code> with a JSON body and a bearer token to another domain. How many HTTP requests does the browser make?</summary><div><p>Two. First an <code>OPTIONS</code> preflight (it's PUT, has an Authorization header and a JSON content type), then the actual PUT, if the preflight response allows the origin, method and headers.</p></div></details>
+  <details><summary>A user is logged in but tries to delete someone else's post. 401 or 403?</summary><div><p><strong>403 Forbidden.</strong> The server knows who they are (so not 401) but refuses the action.</p></div></details>
+  <details><summary>Why is POST not idempotent but PUT is?</summary><div><p>Each POST creates a new resource, so repeating it changes server state again. PUT replaces a resource with the given data; repeating it with the same data leaves the same state.</p></div></details>
+  <details><summary>What does a 304 response contain, and why is it cheap?</summary><div><p>Just headers, no body. The server confirms the client's cached version (matched by <code>If-None-Match</code>/ETag or <code>If-Modified-Since</code>) is still current, so nothing big is re-sent.</p></div></details>
+  <details><summary>Nginx returns 504 to your users. Where should you look?</summary><div><p>At the upstream app server behind Nginx. It didn't answer within the timeout, perhaps because a slow query or a hung process. 502 would mean it answered with something invalid, or crashed.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.flow("#fig-stateless", {
+  w: 720, h: 270,
+  nodes: {
+    c: { x: 80, y: 135, label: "Client", sub: "has token", kind: "client", w: 110 },
+    lb: { x: 280, y: 135, label: "Load balancer", kind: "net", w: 130 },
+    s1: { x: 520, y: 50, label: "Server A", sub: "no memory", kind: "server", w: 120 },
+    s2: { x: 520, y: 135, label: "Server B", sub: "no memory", kind: "server", w: 120 },
+    s3: { x: 520, y: 220, label: "Server C", sub: "no memory", kind: "server", w: 120 },
+    db: { x: 665, y: 135, label: "DB", kind: "db", shape: "cyl", w: 70, h: 56 }
+  },
+  edges: [["c", "lb"], ["lb", "s1"], ["lb", "s2"], ["lb", "s3"], ["s1", "db"], ["s2", "db"], ["s3", "db"]],
+  steps: [
+    { path: ["c", "lb", "s1"], packet: "GET /profile + token", hl: ["s1"], note: "Request 1 lands on <b>Server A</b>. The token inside tells it who you are." },
+    { path: ["s1", "lb", "c"], tone: "ok", packet: "200", note: "A responds, then <b>forgets</b> everything about the request." },
+    { path: ["c", "lb", "s3"], packet: "GET /orders + token", hl: ["s3"], note: "Request 2 goes to <b>Server C</b>, which has never seen you. No problem: the token travels with every request." },
+    { path: ["s3", "lb", "c"], tone: "ok", packet: "200", note: "Because no server keeps session memory, you can add or remove servers freely." },
+    { path: ["c", "lb", "s2"], packet: "POST /cart + token", bad: ["s1"], set: { s1: "crashed ✕" }, hl: ["s2"], note: "Server A crashes. Nothing is lost: request 3 simply goes to <b>Server B</b>." }
+  ]
+});
+
+BD.timeline("#fig-versions", {
+  lanes: ["HTTP/1.0", "HTTP/1.1", "HTTP/2", "HTTP/3"],
+  total: 12, unit: "", ticks: 6, labelW: 90,
+  legend: [{ k: "wait", label: "connection setup (TCP/TLS)" }, { k: "io", label: "waiting for server" }, { k: "client", label: "resource A" }, { k: "cache", label: "resource B" }, { k: "queue", label: "resource C" }],
+  segs: [
+    { lane: 0, s: 0, d: 2, k: "wait", t: "connect" }, { lane: 0, s: 2, d: 1, k: "io" }, { lane: 0, s: 3, d: 1, k: "client", t: "A" },
+    { lane: 0, s: 4, d: 2, k: "wait", t: "connect" }, { lane: 0, s: 6, d: 1, k: "io" }, { lane: 0, s: 7, d: 1, k: "cache", t: "B" },
+    { lane: 0, s: 8, d: 2, k: "wait", t: "connect" }, { lane: 0, s: 10, d: 1, k: "io" }, { lane: 0, s: 11, d: 1, k: "queue", t: "C" },
+    { lane: 1, s: 0, d: 2, k: "wait", t: "connect" }, { lane: 1, s: 2, d: 1, k: "io" }, { lane: 1, s: 3, d: 1, k: "client", t: "A" },
+    { lane: 1, s: 4, d: 1, k: "io" }, { lane: 1, s: 5, d: 1, k: "cache", t: "B" }, { lane: 1, s: 6, d: 1, k: "io" }, { lane: 1, s: 7, d: 1, k: "queue", t: "C" },
+    { lane: 2, s: 0, d: 2, k: "wait", t: "connect" }, { lane: 2, s: 2, d: 1, k: "io" },
+    { lane: 2, s: 3, d: .5, k: "client" }, { lane: 2, s: 3.5, d: .5, k: "cache" }, { lane: 2, s: 4, d: .5, k: "queue" },
+    { lane: 2, s: 4.5, d: .5, k: "client" }, { lane: 2, s: 5, d: .5, k: "cache" }, { lane: 2, s: 5.5, d: .5, k: "queue" },
+    { lane: 3, s: 0, d: 1, k: "wait", t: "QUIC" }, { lane: 3, s: 1, d: 1, k: "io" },
+    { lane: 3, s: 2, d: .5, k: "client" }, { lane: 3, s: 2.5, d: .5, k: "cache" }, { lane: 3, s: 3, d: .5, k: "queue" },
+    { lane: 3, s: 3.5, d: .5, k: "client" }, { lane: 3, s: 4, d: .5, k: "cache" }, { lane: 3, s: 4.5, d: .5, k: "queue" }
+  ],
+  steps: [
+    { to: 2, note: "Everyone starts by setting up a connection. HTTP/3's QUIC handshake is quicker." },
+    { to: 5, note: "<b>HTTP/3</b> is done already. Like HTTP/2, it sends all three requests at once and the responses arrive <b>interleaved</b> on one connection." },
+    { to: 6, note: "<b>HTTP/2</b> finishes: one connection, multiplexed frames, no waiting in line." },
+    { to: 8, note: "<b>HTTP/1.1</b> reuses one persistent connection, but each request still waits for the previous response." },
+    { to: 12, note: "<b>HTTP/1.0</b> finishes last. It paid for a fresh connection three times." }
+  ]
+});
+
+(function () {
+  var fig = document.getElementById("fig-msg");
+  var parts = fig.querySelectorAll("[data-part]");
+  var notes = [
+    "<b>Request line:</b> the method (<code>POST</code>), the resource path and the HTTP version.",
+    "<b>Headers:</b> key–value metadata. <code>Host</code> names the server; the others describe the client, its credentials and the body.",
+    "<b>Blank line, then body:</b> the empty line marks the end of the headers. The body is the data being sent.",
+    "<b>Status line:</b> the version, a status code (<code>201</code>) and a short reason phrase.",
+    "<b>Response headers:</b> describe the body (type, size) and how to cache it.",
+    "<b>Response body:</b> after the blank line, the actual data: the created note."
+  ];
+  new BD.Player(fig, notes.length, {
+    start: 0, minDelay: 2400,
+    note: function (i) { return notes[i]; },
+    render: function (i) { parts.forEach(function (p) { p.classList.toggle("mark", +p.dataset.part === i + 1); }); }
+  });
+})();
+
+BD.flow("#fig-idem", {
+  w: 720, h: 200,
+  nodes: {
+    c: { x: 90, y: 100, label: "Client", kind: "client", w: 120 },
+    s: { x: 360, y: 100, label: "Server", kind: "server", w: 120 },
+    db: { x: 610, y: 100, label: "notes", sub: "1 note", kind: "db", shape: "cyl", w: 150, h: 66 }
+  },
+  edges: [["c", "s"], ["s", "db"]],
+  steps: [
+    { path: ["c", "s", "db"], packet: "PUT /notes/1", set: { db: "note 1 = 'Milk'" }, hl: ["db"], note: "<b>PUT</b> replaces note 1 with <code>{title: 'Milk'}</code>." },
+    { path: ["c", "s", "db"], packet: "PUT /notes/1", tone: "ok", set: { db: "note 1 = 'Milk'" }, ok: ["db"], note: "Same PUT again (say, a retry after a timeout). The state is <b>identical</b>: idempotent." },
+    { path: ["c", "s", "db"], packet: "POST /notes", set: { db: "2 notes" }, hl: ["db"], note: "<b>POST</b> creates a new note. Now there are two." },
+    { path: ["c", "s", "db"], packet: "POST /notes", tone: "bad", set: { db: "3 notes (dupe!)" }, bad: ["db"], note: "Retry the same POST and you get <b>another</b> note. That's why retrying POSTs safely needs extra care (idempotency keys, lesson 11)." }
+  ]
+});
+
+BD.seq("#fig-cors-simple", {
+  actors: ["Your JS (example.com)", "Browser", "api.example.com"],
+  colW: 230,
+  steps: [
+    { from: 0, to: 1, label: "fetch('/data')", note: "Your frontend code calls an API on a <b>different origin</b>." },
+    { from: 1, to: 2, label: "GET /data · Origin: example.com", note: "The browser adds an <code>Origin</code> header automatically. GET with simple headers means no preflight." },
+    { from: 2, to: 2, label: "check CORS policy", note: "The server compares the origin against its allow list." },
+    { from: 2, to: 1, label: "200 · Access-Control-Allow-Origin: example.com", ret: true, tone: "ok", note: "Allowed, so the response includes <code>Access-Control-Allow-Origin</code> with your origin (or <code>*</code>)." },
+    { over: 1, text: "header matches origin ✓", tone: "ok", note: "The browser checks that header against the page's origin." },
+    { from: 1, to: 0, label: "response delivered", ret: true, tone: "ok", note: "Your JS gets the data. If the header were missing or wrong, the browser would block it and log a <b>CORS error</b>." }
+  ]
+});
+
+BD.seq("#fig-cors-pre", {
+  actors: ["Browser", "api.example.com"],
+  colW: 360, rowH: 46, minW: 700,
+  steps: [
+    { from: 0, to: 1, label: "OPTIONS /notes/1", note: "Your code wants <code>PUT</code> with <code>Authorization</code> and JSON. First the browser sends a <b>preflight</b> with no body." },
+    { over: [0, 1], text: "Access-Control-Request-Method: PUT · Request-Headers: authorization, content-type", note: "It asks: <i>Will you accept PUT, with these headers, from example.com?</i>" },
+    { from: 1, to: 0, label: "204 No Content", ret: true, tone: "ok", note: "The server replies <b>204</b>: no body, only permission headers." },
+    { over: [0, 1], text: "Allow-Origin: example.com · Allow-Methods: GET, POST, PUT, DELETE", tone: "ok", note: "It allows the origin and lists the methods it supports…" },
+    { over: [0, 1], text: "Allow-Headers: authorization, content-type · Max-Age: 86400", tone: "ok", note: "…and the headers. <code>Max-Age</code> lets the browser cache this answer (here 24h) and skip future preflights." },
+    { from: 0, to: 1, label: "PUT /notes/1 + JSON body", note: "Every check passed, so the browser sends the <b>real request</b>." },
+    { from: 1, to: 0, label: "200 OK", ret: true, tone: "ok", note: "The normal response comes back, with <code>Access-Control-Allow-Origin</code> again." }
+  ]
+});
+
+BD.flow("#fig-gateway", {
+  w: 720, h: 190,
+  nodes: {
+    c: { x: 90, y: 95, label: "Client", kind: "client", w: 120 },
+    nx: { x: 360, y: 95, label: "Nginx", sub: "reverse proxy", kind: "net", w: 130 },
+    app: { x: 620, y: 95, label: "App server", sub: "upstream", kind: "server", w: 140 }
+  },
+  edges: [["c", "nx"], ["nx", "app"]],
+  steps: [
+    { path: ["c", "nx", "app"], packet: "GET /", hl: ["app"], note: "Nginx forwards the request to the app (the <b>upstream</b>)." },
+    { path: ["app", "nx", "c"], tone: "ok", packet: "200", ok: ["c"], note: "Normally the app answers and Nginx passes it along." },
+    { path: ["c", "nx", "app"], packet: "GET /", bad: ["app"], set: { app: "crashed / garbage" }, note: "Now the app crashes mid-response or returns something invalid…" },
+    { path: ["nx", "c"], tone: "bad", packet: "502 Bad Gateway", bad: ["app"], set: { app: "crashed / garbage" }, note: "…so Nginx replies <b>502 Bad Gateway</b>: the upstream gave an invalid response." },
+    { path: ["c", "nx", "app"], packet: "GET /", warn: ["app"], set: { app: "stuck on slow query…" }, note: "This time the app is alive but stuck, maybe on a slow query." },
+    { path: ["nx", "c"], tone: "warn", packet: "504 Gateway Timeout", warn: ["app"], set: { app: "stuck on slow query…" }, note: "Nginx gives up after its timeout: <b>504 Gateway Timeout</b>." }
+  ]
+});
+
+BD.seq("#fig-etag", {
+  actors: ["Browser cache", "Server"],
+  colW: 340,
+  steps: [
+    { from: 0, to: 1, label: "GET /api/resource", note: "First visit: nothing cached yet." },
+    { from: 1, to: 0, label: "200 · body · ETag: \"3141\" · max-age=10", ret: true, tone: "ok", note: "Full response, plus a fingerprint (<code>ETag</code>), <code>Last-Modified</code> and a 10-second freshness window." },
+    { from: 0, to: 1, label: "GET · If-None-Match: \"3141\"", note: "Later, the browser asks <i>conditionally</i>: send it only if the ETag no longer matches (or it changed since <code>If-Modified-Since</code>)." },
+    { from: 1, to: 0, label: "304 Not Modified (no body)", ret: true, tone: "ok", note: "Still the same version, so <b>304</b> with no body. The browser uses its cached copy." },
+    { from: 0, to: 1, label: "POST update resource", note: "Someone updates the resource." },
+    { from: 1, to: 0, label: "200 · ETag: \"2943\"", ret: true, note: "The server computes a <b>new ETag</b> for the new version." },
+    { from: 0, to: 1, label: "GET · If-None-Match: \"3141\"", note: "A client that still holds the old version asks with the old ETag…" },
+    { from: 1, to: 0, label: "200 · new body · ETag: \"2943\"", ret: true, tone: "warn", note: "…so it gets the full new body and the new ETag. Its next conditional GET will get a 304 again." }
+  ]
+});
+
+(function () {
+  var type = document.getElementById("neg-type"), lang = document.getElementById("neg-lang"), enc = document.getElementById("neg-enc");
+  var req = document.getElementById("neg-req"), res = document.getElementById("neg-res");
+  var size = document.getElementById("neg-size"), meter = document.querySelector("#neg-meter i");
+  var msg = { en: "Hello, here are your records", es: "Hola, aquí están tus registros" };
+  function render() {
+    var t = type.value, l = lang.value, e = enc.value;
+    req.textContent = "GET /api/records HTTP/1.1\nAccept: application/" + t + "\nAccept-Language: " + l + "\nAccept-Encoding: " + (e === "gzip" ? "gzip, deflate, br, zstd" : "identity");
+    var body = t === "json"
+      ? '{\n  "message": "' + msg[l] + '",\n  "count": 11000\n}'
+      : '<response>\n  <message>' + msg[l] + '</message>\n  <count>11000</count>\n</response>';
+    res.textContent = "HTTP/1.1 200 OK\nContent-Type: application/" + t + "\nContent-Language: " + l + (e === "gzip" ? "\nContent-Encoding: gzip" : "") + "\n\n" + body;
+    size.textContent = e === "gzip" ? "3.8 MB (gzip)" : "26 MB (uncompressed)";
+    meter.style.width = e === "gzip" ? "14.6%" : "100%";
+    meter.parentNode.className = "meter " + (e === "gzip" ? "ok" : "warn");
+  }
+  [type, lang, enc].forEach(function (s) { s.addEventListener("change", render); });
+  render();
+})();
+
+BD.seq("#fig-stream", {
+  actors: ["Client", "Server"],
+  colW: 340,
+  steps: [
+    { from: 0, to: 1, label: "GET /big-file", note: "An ordinary GET request." },
+    { from: 1, to: 0, label: "200 · text/event-stream · keep-alive", ret: true, note: "The headers say: this will arrive as a stream of events, so keep the connection open." },
+    { from: 1, to: 0, label: "chunk 1", ret: true, tone: "ok", note: "The first chunk arrives and the client can show it immediately." },
+    { from: 1, to: 0, label: "chunk 2", ret: true, tone: "ok", note: "More chunks follow on the same connection. The client appends each one." },
+    { from: 1, to: 0, label: "chunk 3 … n", ret: true, tone: "ok", note: "This continues until the whole file has been sent." },
+    { from: 0, to: 0, label: "assemble full file", note: "No giant response sits in memory on either side, and the user sees progress right away." }
+  ]
+});
+</script>
+</body>
+</html>

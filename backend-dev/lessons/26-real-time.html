@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Real-time backends · Backend Dev</title>
+<meta name="description" content="Polling, long polling, SSE and WebSockets, and scaling them with pub/sub.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="26">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 25</span><span>Video · 51:54</span></div>
+  <h1>Real-time backends</h1>
+  <p class="lead">Two people look at the same task board; one drags a card and the other should see it move <em>live</em>. Everything so far followed one shape (the client asks, the server answers), and the server has no way to speak first. This lesson walks from polling to long polling, <strong>Server-Sent Events</strong> and <strong>WebSockets</strong>, measures how many connections one machine can hold, and shows how to scale real-time across many servers.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Why polling's cost scales with viewers, not events</li><li>Long polling and its gap</li><li>Server-Sent Events: a response that never ends</li><li>WebSockets: handshake, frames, masking, heartbeats</li><li>Connection limits: file descriptors, ports and memory</li><li>Pub/sub, catch-up, fan-out and reconnect storms</li></ul></div>
+</div>
+<h2 id="problem">The server can't speak first</h2>
+<p>HTTP is request–response: the client starts every conversation (lesson 5). When something changes on the server, there's no way to tell a browser that didn't ask. Every real-time technique is a way around that.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>Waiting for a package. <strong>Polling</strong>: you check the doorstep every five minutes. <strong>Long polling</strong>: you phone the courier and they stay on the line until it arrives, then hang up, and you call again. <strong>SSE</strong>: the courier keeps a radio channel open and announces each delivery. <strong>WebSocket</strong>: a two-way radio; you can both talk whenever you like.</p></aside>
+
+<h2 id="polling">Polling: ask again and again</h2>
+<p>The intuitive fix: every few seconds the browser asks "has board 412 changed?". Usually the answer is no. It works, and for an internal tool with a few users it's a perfectly reasonable choice. At scale, three things hurt:</p>
+<ul>
+  <li><strong>Delay:</strong> a change waits on average <strong>half the interval</strong> before anyone sees it.</li>
+  <li><strong>Cost:</strong> each poll is a full request: load balancer, auth middleware, logging, database query, serialization. Mostly to say "nothing changed". Shrink the interval for snappier updates and the load grows in proportion.</li>
+  <li><strong>Battery:</strong> on phones, every poll wakes the radio, one of the most power-hungry things a phone does.</li>
+</ul>
+<figure class="anim" id="fig-poll">
+  <figcaption class="anim-title">Try it: what does polling cost?</figcaption>
+  <div class="widget">
+    <div class="row">
+      <label style="flex:1">Viewers <input type="range" id="pl-users" min="0" max="5" value="3" style="flex:1"> <b id="pl-users-v"></b></label>
+      <label style="flex:1">Poll every <input type="range" id="pl-int" min="0" max="6" value="3" style="flex:1"> <b id="pl-int-v"></b></label>
+    </div>
+    <div class="row"><label style="flex:1">Changes on the board per minute <input type="range" id="pl-ev" min="0" max="5" value="1" style="flex:1"> <b id="pl-ev-v"></b></label></div>
+    <div class="tiles" id="pl-tiles"></div>
+    <div class="out" id="pl-out"></div>
+  </div>
+</figure>
+<p>The core flaw: <strong>polling's cost scales with the number of viewers, not the number of events</strong>. A board where nothing happens all day costs as much as a busy one. We want the server to speak first, and to pay only for actual changes.</p>
+
+<h2 id="long-polling">Long polling: hold the question open</h2>
+<p>Ask, and let the server take its time: it holds the request open (up to a minute or so) and answers the moment something changes. The browser handles the response and immediately asks again.</p>
+<figure class="anim" id="fig-lp">
+  <figcaption class="anim-title">Long polling and its gap</figcaption>
+</figure>
+<p>RFC 6202 documents the technique together with its flaws: after each answer there's a gap while the browser processes the response and reconnects, during which the server can't reach it. Average latency is about one network transit, but the worst case is more than three. It served the web for years; then came something cleverer.</p>
+
+<h2 id="sse">Server-Sent Events: a response that never ends</h2>
+<p>What if the response simply never finishes? The browser makes an ordinary <code>GET</code>; the server answers <code>200</code> with <code>Content-Type: text/event-stream</code> and keeps the connection open, writing a few lines of text whenever there's news. Still plain HTTP, no new protocol.</p>
+<div class="split">
+<pre><span class="c"># the response body, as it trickles in</span>
+<span class="k">retry</span>: 3000
+
+<span class="k">id</span>: 41
+<span class="k">event</span>: task.moved
+<span class="k">data</span>: {"task":7,"to":"in_progress"}
+
+<span class="k">id</span>: 42
+<span class="k">event</span>: task.created
+<span class="k">data</span>: {"task":9,"title":"Fix login"}
+</pre>
+<pre><span class="c">// the browser side: reconnection is built in</span>
+<span class="k">const</span> es = <span class="k">new</span> EventSource(<span class="s">"/boards/412/events"</span>);
+es.addEventListener(<span class="s">"task.moved"</span>, (e) =&gt; {
+  moveCard(JSON.parse(e.data));
+});
+<span class="c">// on a drop, the browser waits `retry` ms, reconnects,
+// and sends Last-Event-ID: 42 automatically</span></pre>
+</div>
+<p>Just four fields: <code>id</code>, <code>event</code>, <code>data</code> and <code>retry</code>. Because SSE is a web standard, <strong>the browser reconnects for you</strong> and sends a <code>Last-Event-ID</code> header, so the server can replay what was missed.</p>
+<figure class="anim" id="fig-sse">
+  <figcaption class="anim-title">SSE survives a dropped connection</figcaption>
+</figure>
+<p>SSE is no toy. Uber built its driver push platform on it, LinkedIn used it for instant messaging with typing indicators and read receipts, and every major LLM API streams tokens to you with it: each word appearing in your chat window is a <code>data:</code> line. Its one limit is in the name: the <em>server</em> sends. A browser that wants to tell the server something (the user dragged a card) needs a separate <code>POST</code>. For many products that's fine.</p>
+
+<h2 id="websockets">WebSockets: one connection, both directions</h2>
+<p>A WebSocket starts life as an ordinary HTTP <code>GET</code>, so it passes through everything that understands HTTP, and then <strong>upgrades</strong> into something else.</p>
+<figure class="anim" id="fig-ws">
+  <figcaption class="anim-title">Try it: the opening handshake</figcaption>
+  <div class="widget">
+    <div class="row">
+      <label style="flex:1">Sec-WebSocket-Key <input type="text" id="ws-key" value="dGhlIHNhbXBsZSBub25jZQ==" style="flex:1;font-family:var(--mono)"></label>
+      <button type="button" class="ghost" id="ws-rand">New random key</button>
+    </div>
+    <div class="split">
+      <pre id="ws-req" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+      <pre id="ws-res" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+    </div>
+    <div class="out" id="ws-out" style="margin-top:8px"></div>
+  </div>
+</figure>
+<p>The browser sends 16 random bytes, base64-encoded. The server appends a fixed GUID from the spec, takes the SHA-1, base64-encodes it and answers <code>101 Switching Protocols</code>. That isn't security (anyone can compute it); it proves the responder actually understood the WebSocket request and isn't a cache replaying an old response. After that there are no more headers, methods or status codes: just a two-way stream of <strong>frames</strong>.</p>
+<h3>Frames and masking</h3>
+<figure class="anim" id="fig-frame">
+  <figcaption class="anim-title">Try it: build a WebSocket frame</figcaption>
+  <div class="widget">
+    <div class="row">
+      <label style="flex:1">Message <input type="text" id="fr-msg" value="moved task 7" style="flex:1"></label>
+      <label>Direction <select id="fr-dir"><option value="c">browser → server (masked)</option><option value="s">server → browser</option></select></label>
+      <button type="button" class="ghost" id="fr-key">New masking key</button>
+    </div>
+    <div id="fr-bits"></div>
+    <pre id="fr-hex" style="margin-top:10px;white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+    <div class="out" id="fr-out"></div>
+  </div>
+</figure>
+<div class="split">
+  <div class="card"><h4>Tiny headers</h4><p>The first byte holds <b>FIN</b> (last piece of a message) and the <b>opcode</b>: 1 text, 2 binary, 8 close, 9 ping, 10 pong, 0 continuation. The second holds the <b>mask</b> bit and a 7-bit length; 126 or 127 mean "real length in the next 2 or 8 bytes". A small message costs a 2-byte header, versus hundreds of bytes of headers per poll.</p></div>
+  <div class="card"><h4>Why browsers mask</h4><p>Every browser→server frame is XORed with a fresh random 4-byte key sent in clear text. It isn't encryption. While the protocol was being designed, researchers showed that attacker-chosen bytes could look like an HTTP request to a confused proxy and <strong>poison its cache</strong> (say, replacing a popular analytics script for everyone behind it). Random masking means page JavaScript can't control the bytes on the wire.</p></div>
+</div>
+<h3>Heartbeats</h3>
+<p>When a phone walks into a lift or switches from Wi-Fi to mobile data, the server receives nothing (no error, no close) and keeps holding a socket for a user who's gone. To a socket, idle and dead look identical. The fix is to ask: either side sends a <b>ping</b>, the other must reply with a <b>pong</b>, and no pong within ~30 seconds means the connection is dead and its resources are freed.</p>
+
+<h2 id="limits">How many connections can one machine hold?</h2>
+<p>An experiment on a 16-core, 61 GB Linux box with a tiny Go server that only accepts and holds connections. Each limit hit was something different:</p>
+<div class="memory wide" id="lim-bars"></div>
+<div class="cards">
+  <div class="card"><h4>File descriptors</h4><p>In Unix every socket is a file. <code>ulimit -n</code> said 1,024, so after stdin/stdout/stderr, the listener and the epoll instance, it stopped at ~1,017. Clients saw timeouts, not errors; the healthy-looking server logged "too many open files". Node, Python and Java inherit this soft limit; <strong>Go raises its own</strong> to the hard maximum at startup.</p></div>
+  <div class="card"><h4>Ports: the client's limit</h4><p>Next stop: 28,190, "cannot assign requested address". A TCP connection is identified by four things (source IP, source port, destination IP, destination port). The server's side never changes, so the <em>load-testing client's</em> ephemeral ports (32,768–60,999) ran out. The "65,000-connection server limit" is a myth; dialling from three client IPs reached 75,000.</p></div>
+  <div class="card"><h4>Memory: the real ceiling</h4><p>75,000 idle connections used ~722 MB: about <strong>9.75 KB each</strong> (mostly the goroutine and buffers per connection), so a million is just under 10 GB of heap, plus kernel buffers. Systems chasing millions watch all sockets from one epoll loop instead of a goroutine each.</p></div>
+</div>
+
+<h2 id="scaling">Scaling out: connections are state</h2>
+<p>We spent the whole course making servers stateless. But a persistent connection <em>is</em> state: it lives in one process's memory and can't be moved or shared. With two instances behind a load balancer, browser A connects to instance 1 and browser B to instance 2, and when A moves a task, instance 1 has no way to reach B.</p>
+<p><strong>Sticky sessions</strong> (always routing a client to the same instance) don't help: B is still on the other instance. The instances need to talk to each other, which is what <strong>pub/sub</strong> is for.</p>
+<figure class="anim" id="fig-pubsub">
+  <figcaption class="anim-title">Pub/sub between instances</figcaption>
+</figure>
+<div class="split">
+  <div class="card"><h4>At-most-once vs at-least-once</h4><p>Redis pub/sub is fire-and-forget: an instance that isn't subscribed at that instant (say, mid-deploy) misses the message forever. If you need <strong>at-least-once</strong> delivery, use something that stores messages and tracks acknowledgements: Redis Streams, Kafka, or a queue.</p></div>
+  <div class="card"><h4>Catching up</h4><p>Connections drop all the time: network switches, closed laptop lids, load-balancer idle timeouts. Number every message and have the client say where it got to. Uber's push platform does exactly this: "I have up to sequence 2" → the server resumes from 3. It's the same idea as SSE's <code>Last-Event-ID</code>.</p></div>
+</div>
+<h3>Fan-out and reconnect storms</h3>
+<ul>
+  <li><strong>Fan-out:</strong> the real work is <em>events × subscribers</em>. If 30,000 people watch a board, one moved card means 30,000 writes. Discord measured 0.9–2.1 seconds to publish one event to a 30,000-member community online at once; the fix was spreading the fan-out across the machines that own the recipients.</li>
+  <li><strong>Reconnect storms:</strong> an instance holding 50,000 connections dies, and 50,000 clients reconnect in the same second, each wanting its initial state. Slack made reconnecting cheap by caching start-up data at the network edge, so the storm never reaches the core.</li>
+</ul>
+
+<h2 id="choosing">Choosing a technique</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th></th><th>Direction</th><th>Latency</th><th>Cost driver</th><th>Good for</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Polling</strong></td><td>Client asks</td><td>½ interval on average</td><td>Viewers × poll rate</td><td>Internal tools, few users, slow-changing data</td></tr>
+    <tr><td><strong>Long polling</strong></td><td>Client asks, server delays</td><td>~1 transit, worst &gt; 3</td><td>A request per event, plus gaps</td><td>Legacy environments</td></tr>
+    <tr><td><strong>SSE</strong></td><td>Server → client</td><td>Immediate</td><td>Open connections + events</td><td>Notifications, feeds, dashboards, LLM streaming</td></tr>
+    <tr><td><strong>WebSocket</strong></td><td>Both ways</td><td>Immediate</td><td>Open connections + events</td><td>Chat, live collaboration, multiplayer, live boards</td></tr>
+  </tbody>
+</table></div>
+<p class="small muted">Beyond this lesson: <strong>presence</strong> (who's online) and <strong>collaborative editing</strong> (live cursors as in Notion or Google Docs, where concurrent edits must merge; see CRDTs) build on these same foundations.</p>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>HTTP can't let the server speak first. Polling works around it, but its cost scales with viewers, and its delay averages half the interval.</li>
+  <li>Long polling holds requests open but leaves a gap after each response.</li>
+  <li>SSE keeps one HTTP response open forever, with built-in reconnect and <code>Last-Event-ID</code> catch-up; server → client only.</li>
+  <li>WebSockets upgrade an HTTP request into a two-way stream of tiny frames; browsers mask frames to protect proxies; ping/pong detects dead connections.</li>
+  <li>One machine can hold around a million idle connections; limits come from file descriptors, client ports, then memory (~10 KB per connection).</li>
+  <li>Across instances, use pub/sub; choose at-least-once delivery when messages matter, number messages for catch-up, and plan for fan-out and reconnect storms.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>You poll every 2 seconds. On average, how long until a user sees a change? And what happens to load if you poll every 500 ms?</summary><div><p>About 1 second, half the interval. Polling every 500 ms cuts the delay to ~250 ms but quadruples the request load, nearly all of it "no change".</p></div></details>
+  <details><summary>A notifications feed only ever flows from server to browser. SSE or WebSocket?</summary><div><p>SSE: plain HTTP, automatic reconnection with <code>Last-Event-ID</code>, and no need for a bidirectional channel. User actions can go through normal POST requests.</p></div></details>
+  <details><summary>After scaling your WebSocket server to 3 instances, users only see some live updates. Why, and does enabling sticky sessions fix it?</summary><div><p>Each instance can only write to its own sockets, so an event handled on one never reaches users connected to the others. Sticky sessions don't fix it; publish events through pub/sub (Redis, NATS, Kafka) so every instance can deliver to its own connections.</p></div></details>
+  <details><summary>Your load test stalls at ~28,000 connections with "cannot assign requested address", though the server has plenty of RAM. What's the limit?</summary><div><p>The load-testing client ran out of ephemeral source ports. Each connection needs a unique (source IP, source port, destination IP, destination port) tuple; use more client IPs or machines.</p></div></details>
+  <details><summary>Why do WebSocket servers send pings?</summary><div><p>A client that vanished (dead battery, lost network) sends no close frame, so an idle connection and a dead one look the same. A missing pong within the timeout reveals the dead connection so its resources can be freed.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+(function () {
+  var U = [100, 1000, 5000, 10000, 50000, 100000], I = [0.5, 1, 2, 3, 5, 10, 30], E = [0, 1, 5, 20, 60, 300];
+  var $ = function (id) { return document.getElementById(id); };
+  function n(x) { return Math.round(x).toLocaleString("en-US"); }
+  function render() {
+    var u = U[+$("pl-users").value], iv = I[+$("pl-int").value], ev = E[+$("pl-ev").value];
+    $("pl-users-v").textContent = n(u); $("pl-int-v").textContent = iv + " s"; $("pl-ev-v").textContent = ev;
+    var rps = u / iv, lambda = ev / 60, useful = 1 - Math.exp(-lambda * iv), push = ev * u / 60;
+    $("pl-tiles").innerHTML = '<div class="tile ' + (rps > 2000 ? "bad" : rps > 300 ? "warn" : "") + '"><small>Poll requests / second</small><b>' + n(rps) + '</b></div><div class="tile ' + (iv / 2 > 2 ? "warn" : "") + '"><small>Average delay</small><b>' + (iv / 2) + ' s</b></div><div class="tile ' + (useful < 0.2 ? "bad" : "") + '"><small>Polls that find "nothing changed"</small><b>' + ((1 - useful) * 100).toFixed(useful > 0.995 ? 1 : 0) + '%</b></div><div class="tile ok"><small>Push messages / second</small><b>' + (push < 10 ? push.toFixed(1) : n(push)) + "</b></div>";
+    $("pl-out").innerHTML = "Each poll passes through the load balancer, auth, logging and a database query. With push, the server sends a message only when something changes: " + (ev ? n(ev) + " change" + (ev > 1 ? "s" : "") + " a minute × " + n(u) + " viewers." : "<b>zero</b> messages for a quiet board.");
+  }
+  ["pl-users", "pl-int", "pl-ev"].forEach(function (id) { $(id).addEventListener("input", render); });
+  render();
+})();
+
+BD.seq("#fig-lp", {
+  actors: ["Browser", "Server"],
+  colW: 300, rowH: 40, pad: 90,
+  steps: [
+    { from: 0, to: 1, label: "GET /boards/412/changes?since=40", note: "The browser asks for changes…" },
+    { from: 1, to: 1, label: "hold the request… (up to ~60 s)", note: "…and the server deliberately doesn't answer yet." },
+    { from: 1, to: 0, label: "200 [task 7 moved]", ret: true, tone: "ok", note: "A card moves: the server answers at once. Latency ≈ one network transit." },
+    { from: 0, to: 0, label: "process response · open a new request", note: "Now the gap: the browser handles the response and reconnects." },
+    { from: 1, to: 1, label: "task 9 created: nobody to tell!", tone: "bad", note: "An event during the gap has no open request to ride on. It must be buffered until the next request arrives, so worst-case latency exceeds three transits." },
+    { from: 0, to: 1, label: "GET …?since=41", note: "The new request arrives…" },
+    { from: 1, to: 0, label: "200 [task 9 created] (late)", ret: true, note: "…and collects the buffered event, late." }
+  ]
+});
+
+BD.seq("#fig-sse", {
+  actors: ["Browser", "Server"],
+  colW: 300, rowH: 40, pad: 90,
+  steps: [
+    { from: 0, to: 1, label: "GET /boards/412/events · Accept: text/event-stream", note: "An ordinary GET." },
+    { from: 1, to: 0, label: "200 · Content-Type: text/event-stream", ret: true, note: "The server answers 200… and never finishes the body." },
+    { from: 1, to: 0, label: "id: 41 · event: task.moved", ret: true, tone: "ok", note: "Each change is a few lines of text written to the open response." },
+    { from: 1, to: 0, label: "id: 42 · event: task.created", ret: true, tone: "ok", note: "Server speaks first, as often as it likes, over one connection." },
+    { from: 0, to: 0, label: "✕ connection drops (Wi-Fi → 4G)", tone: "bad", note: "The network changes and the connection dies." },
+    { from: 0, to: 1, label: "GET … · Last-Event-ID: 42", note: "The browser itself waits <code>retry</code> ms, reconnects, and reports the last ID it saw. No code needed." },
+    { from: 1, to: 0, label: "id: 43, 44 (missed while away)", ret: true, tone: "ok", note: "The server replays everything after 42, and the board catches up." }
+  ]
+});
+
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+  function b64(bytes) { var s = ""; bytes.forEach(function (x) { s += String.fromCharCode(x); }); return btoa(s); }
+  function render() {
+    var key = $("ws-key").value.trim();
+    $("ws-req").innerHTML = '<span class="c">// browser → server</span>\n<span class="k">GET</span> /boards/412/live HTTP/1.1\nHost: api.example.com\n<span class="s">Upgrade: websocket\nConnection: Upgrade\nSec-WebSocket-Key: ' + key.replace(/[<&]/g, "") + "</span>\nSec-WebSocket-Version: 13";
+    if (!(window.crypto && crypto.subtle)) { $("ws-out").textContent = "Your browser blocks the Web Crypto API here (it needs HTTPS)."; return; }
+    crypto.subtle.digest("SHA-1", new TextEncoder().encode(key + GUID)).then(function (d) {
+      var acc = b64(new Uint8Array(d));
+      $("ws-res").innerHTML = '<span class="c">// server → browser</span>\nHTTP/1.1 <span class="n">101 Switching Protocols</span>\n<span class="s">Upgrade: websocket\nConnection: Upgrade\nSec-WebSocket-Accept: ' + acc + "</span>";
+      $("ws-out").innerHTML = "base64( SHA-1( key + <code>" + GUID + "</code> ) ) = <code>" + acc + "</code>" + (key === "dGhlIHNhbXBsZSBub25jZQ==" ? ' <span class="chip ok">matches the example in RFC 6455</span>' : "");
+    });
+  }
+  $("ws-key").addEventListener("input", render);
+  $("ws-rand").addEventListener("click", function () { var a = new Uint8Array(16); crypto.getRandomValues(a); $("ws-key").value = b64(a); render(); });
+  render();
+})();
+
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var mask = new Uint8Array(4); crypto.getRandomValues(mask);
+  function hex(b) { return ("0" + b.toString(16)).slice(-2).toUpperCase(); }
+  function render() {
+    var payload = new TextEncoder().encode($("fr-msg").value), masked = $("fr-dir").value === "c", len = payload.length;
+    var head = [0x81], ext = [];
+    var len7 = len < 126 ? len : len < 65536 ? 126 : 127;
+    head.push((masked ? 0x80 : 0) | len7);
+    if (len7 === 126) ext = [len >> 8, len & 255];
+    if (len7 === 127) { ext = [0, 0, 0, 0, (len >>> 24) & 255, (len >> 16) & 255, (len >> 8) & 255, len & 255]; }
+    var body = Array.prototype.map.call(payload, function (b, i) { return masked ? b ^ mask[i % 4] : b; });
+    var cell = function (bits, label, cls) { return '<div class="' + (cls || "") + '"><b>' + bits + "</b><small>" + label + "</small></div>"; };
+    $("fr-bits").innerHTML = '<div class="fr-bits">' + cell("1", "FIN") + cell("000", "RSV") + cell("0001", "opcode: text") + cell(masked ? "1" : "0", "MASK", masked ? "on" : "") + cell(("0000000" + len7.toString(2)).slice(-7), "length " + (len7 < 126 ? len : len7 === 126 ? "→ +2 bytes" : "→ +8 bytes")) + "</div>";
+    var lines = '<span class="c">// header</span>  ' + head.concat(ext).map(hex).join(" ") +
+      (masked ? '\n<span class="c">// mask key</span> <span class="n">' + Array.prototype.map.call(mask, hex).join(" ") + "</span>" : "") +
+      '\n<span class="c">// payload</span> ' + body.slice(0, 48).map(hex).join(" ") + (body.length > 48 ? " …" : "") +
+      (masked ? '\n<span class="c">// unmasked</span> <span class="s">' + Array.prototype.slice.call(payload, 0, 48).map(hex).join(" ") + (len > 48 ? " …" : "") + "</span>" : "");
+    $("fr-hex").innerHTML = lines;
+    $("fr-out").innerHTML = "Total on the wire: <b>" + (head.length + ext.length + (masked ? 4 : 0) + len) + " bytes</b> for a " + len + "-byte message." + (masked ? " The payload bytes look random because each is XORed with the mask key, which is sent right there in clear text." : " Server frames aren't masked.");
+  }
+  $("fr-msg").addEventListener("input", render); $("fr-dir").addEventListener("change", render);
+  $("fr-key").addEventListener("click", function () { crypto.getRandomValues(mask); render(); });
+  render();
+})();
+
+(function () {
+  var rows = [["1,017", 1017, "file-descriptor limit (ulimit -n 1024)"], ["28,190", 28190, "client ran out of source ports"], ["75,000", 75000, "3 client IPs · ~722 MB"], ["~1,000,000", 1e6, "memory: ~10 GB heap"]];
+  var max = Math.log10(1e6);
+  document.getElementById("lim-bars").innerHTML = rows.map(function (r) {
+    return '<div class="lvl"><b>' + r[0] + '</b><div class="bar" style="width:' + (Math.log10(r[1]) / max * 100).toFixed(1) + '%"></div><span>' + r[2] + "</span></div>";
+  }).join("") + '<p class="small muted" style="margin:2px 0 0">Bars on a log scale.</p>';
+})();
+
+BD.flow("#fig-pubsub", {
+  w: 720, h: 290,
+  nodes: {
+    a: { x: 80, y: 60, label: "Browser A", sub: "", kind: "client", w: 120 },
+    b: { x: 80, y: 230, label: "Browser B", sub: "", kind: "client", w: 120 },
+    i1: { x: 320, y: 60, label: "Instance 1", sub: "", kind: "server", w: 170 },
+    i2: { x: 320, y: 230, label: "Instance 2", sub: "", kind: "server", w: 170 },
+    bus: { x: 600, y: 145, label: "Redis pub/sub", sub: "", kind: "queue", w: 160 }
+  },
+  edges: [["a", "i1", { label: "WebSocket" }], ["b", "i2", { label: "WebSocket" }], ["i1", "bus"], ["i2", "bus"]],
+  steps: [
+    { path: [["a", "i1"], ["b", "i2"]], dim: ["bus"], set: { i1: "socket: A · board 412", i2: "socket: B · board 412" }, note: "The load balancer put A on instance 1 and B on instance 2. Each socket lives in one process's memory." },
+    { path: ["a", "i1"], dim: ["bus"], warn: ["b"], packet: "move task 7", set: { i1: "socket: A · board 412", i2: "socket: B · board 412", b: "sees nothing" }, note: "A moves a card. Instance 1 can only write to its own sockets, and B isn't one of them." },
+    { path: ["i1", "bus"], hl: ["bus"], packet: "board:412", fresh: true, set: { i1: "publish board:412", i2: "subscribed: board:412", bus: "topic board:412" }, note: "Instead, instance 1 <b>publishes</b> the event to topic <code>board:412</code>…" },
+    { path: ["bus", "i2", "b"], tone: "ok", ok: ["b", "i2"], set: { i2: "finds B's socket", bus: "topic board:412", b: "card moves ✓" }, note: "…Redis hands it to every subscribed instance; instance 2 finds B's socket and writes the frame." },
+    { path: ["i1", "bus"], fresh: true, bad: ["i2"], warn: ["b"], packet: "board:412", set: { i2: "restarting (deploy)", bus: "delivered to nobody", b: "reconnecting…" }, note: "Caveat: Redis pub/sub is <b>fire-and-forget</b>. Events published while instance 2 restarts are lost, so clients must catch up by sequence number when they reconnect." }
+  ]
+});
+</script>
+</body>
+</html>

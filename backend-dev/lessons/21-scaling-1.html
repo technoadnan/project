@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scaling & performance, part 1 · Backend Dev</title>
+<meta name="description" content="Latency, percentiles, throughput and utilization; measuring bottlenecks; database fixes; caching; vertical vs horizontal scaling.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="21">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 21.1</span><span>Video · 1:47:31</span></div>
+  <h1>Backend scaling & performance engineering, part 1</h1>
+  <p class="lead">Before learning any scaling technique, learn to <strong>think</strong> about performance: what "fast" means, why averages lie, why systems collapse near full capacity, and why you must <strong>measure before you fix</strong>. Then the classic fixes: database tuning, caching, and the choice between scaling up and scaling out.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Latency, percentiles (P50/P90/P99) and throughput</li><li>Utilization and why latency explodes near 100%</li><li>Finding bottlenecks: timing, profiling, flame graphs and tracing</li><li>Database wins: N+1 queries, indexes, EXPLAIN ANALYZE and connection pooling</li><li>Cache invalidation and patterns</li><li>Vertical vs horizontal scaling</li></ul></div>
+</div>
+<h2 id="latency">What does "fast" mean?</h2>
+<p>A user clicks a button. The request crosses the internet, your server queries the database, maybe calls an email API, serializes JSON, and sends it back for the browser to render. The total time from click to cards on screen is <strong>latency</strong>. When users say "your app is slow", that's what they mean, whether or not they know the word.</p>
+<p>Latency isn't one number. One request hits a cache and takes 50 ms; another arrives while the server is juggling 50 others and takes 200 ms.</p>
+
+<h2 id="percentiles">Averages lie; percentiles don't</h2>
+<p>Suppose 99% of requests finish in under 50 ms and 1% take 5 seconds. The average looks like a healthy ~100 ms, yet at a million requests a day, <strong>10,000 people stare at a spinner for 5 seconds</strong>. Percentiles show what the average hides:</p>
+<ul>
+  <li><strong>P50</strong> (median): half of requests are faster than this.</li>
+  <li><strong>P90</strong>: 10% of requests are slower than this.</li>
+  <li><strong>P99</strong>: 1% of requests are slower than this.</li>
+</ul>
+<figure class="anim" id="fig-pct">
+  <figcaption class="anim-title">Try it: 1,000 requests, one dot each</figcaption>
+  <div class="widget">
+    <div class="row">
+      <label>Slow requests <input type="range" id="pc-share" min="0" max="10" step="0.5" value="2"> <b id="pc-share-v">2%</b></label>
+      <label>Slow ones take <input type="range" id="pc-slow" min="0.5" max="6" step="0.5" value="5"> <b id="pc-slow-v">5 s</b></label>
+    </div>
+    <div class="tiles" id="pc-tiles"></div>
+    <div id="pc-dots"></div>
+    <div class="legend" style="padding:6px 0 0"><span><i style="background:var(--ok)"></i>under 100 ms</span><span><i style="background:var(--warn)"></i>100 ms – 1 s</span><span><i style="background:var(--bad)"></i>over 1 s</span></div>
+  </div>
+</figure>
+<p class="small muted">Slide the slow share from 1% to 2% and watch P99 jump while the average barely moves.</p>
+<p>Teams watch <strong>P95 and P99</strong> most closely. Not just out of empathy: the slowest requests usually run your most complex logic (payments, purchases, external calls), so they often belong to your most valuable users.</p>
+
+<h2 id="throughput">Throughput</h2>
+<p>Latency is how long one request takes; <strong>throughput</strong> is how many requests per second (or minute) the system handles. They're linked: 150 ms at 10 req/s can become 2 s at 1,000 req/s. Measuring both answers the real questions: Will we survive Black Friday? That email campaign? Being featured on a big podcast? How many concurrent users can we serve before we need more resources?</p>
+
+<h2 id="utilization">Utilization: why systems fall off a cliff</h2>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>Sunday evening: the ice-cream shop is empty and you're served instantly. Tuesday lunchtime: the same worker makes each cone in the same two minutes, but you wait twenty, because of the queue in front of you. The worker didn't slow down; the <strong>waiting</strong> grew.</p></aside>
+<p><strong>Utilization</strong> is the share of capacity in use. Servers behave exactly like the shop: at low utilization requests are handled immediately; as it rises, requests queue behind each other. The relationship isn't linear. Near 100% waiting time <strong>explodes</strong>, just as a highway flows at 50% capacity, slows at 80%, jams unpredictably at 90% and freezes at 100%.</p>
+<figure class="anim" id="fig-util">
+  <figcaption class="anim-title">Try it: drag utilization toward 100%</figcaption>
+  <div class="widget">
+    <div class="row"><label style="flex:1">Utilization <input type="range" id="ut-r" min="5" max="98" step="1" value="50" style="flex:1"> <b id="ut-v">50%</b></label></div>
+    <div class="tiles" id="ut-tiles"></div>
+    <div id="ut-chart"></div>
+    <p class="small muted" style="margin:6px 0 0">Simple queueing model: each request needs 20 ms of work; time in system = 20 ms ÷ (1 − utilization).</p>
+  </div>
+</figure>
+<aside class="callout ok"><div class="tag">Headroom</div><p>Production systems typically run at <strong>60–80% utilization</strong>. Real traffic isn't a metronome; it arrives in <strong>bursts</strong>, and a burst on top of 90% average load pushes you past 100% and down.</p></aside>
+
+<h2 id="measure">Find the bottleneck: measure, don't guess</h2>
+<p>"The system is slow" means <em>one specific thing</em> is slow. Skipping the search for it and jumping to textbook fixes (add a cache, upgrade Postgres, add servers) sometimes works by luck, and often burns weeks on a problem you don't have.</p>
+<figure class="anim" id="fig-guess">
+  <figcaption class="anim-title">GET /products/:id: a week spent on the wrong fix</figcaption>
+</figure>
+<p>Other common surprises: JSON serialization, a giant response payload crawling over the network, an external API called inside a loop.</p>
+<div class="split">
+  <div class="card"><h4>Profiling</h4><p>A profiler attaches to the running app and records which functions run and for how long. A <strong>flame graph</strong> makes that readable: the wider a bar, the more time it took; functions called by others stack on top. Best for <strong>CPU-bound</strong> work.</p></div>
+  <div class="card"><h4>Distributed tracing</h4><p>Most backend slowness is <strong>I/O-bound</strong> (databases, external APIs, queues), which profilers measure poorly. Tracing follows each request across components: "2 ms in your code, 800 ms in this query" (lesson 18).</p></div>
+</div>
+<div class="flame" aria-label="Example flame graph">
+  <div class="row"><span style="flex:1;background:var(--c-server)">handleGetFeed (100%)</span></div>
+  <div class="row"><span style="flex:12;background:var(--c-db)">db.query (12%)</span><span style="flex:58;background:var(--bad)">JSON.stringify (58%)</span><span style="flex:30;background:var(--c-net)">callRecommendations (30%)</span></div>
+  <div class="row"><span style="flex:12;background:transparent"></span><span style="flex:58;background:color-mix(in srgb, var(--bad) 75%, black)">serializeNestedComments (55%)</span><span style="flex:30;background:transparent"></span></div>
+</div>
+<p class="small muted">A made-up flame graph: you'd have guessed the database; the real cost is serializing deeply nested comments.</p>
+
+<h2 id="database">Database: the usual suspects</h2>
+<p>Databases do hard work: durable storage, consistency under concurrent reads and writes, complex queries over millions of rows. Before blaming them, check the low-hanging fruit.</p>
+<h3>1. The N+1 query problem</h3>
+<p>Show 20 blog posts with author names: one query for the posts, then one query <em>per post</em> for its author. That's 21 queries, and the count grows with N. Each query pays network, parsing and planning overhead, so 1,000 items × 5 ms = 5 seconds of spinner.</p>
+<figure class="anim" id="fig-n1">
+  <figcaption class="anim-title">Try it: how many queries does the page make?</figcaption>
+  <div class="widget">
+    <div class="row"><label style="flex:1">Posts on the page <input type="range" id="n1-n" min="10" max="1000" step="10" value="20" style="flex:1"> <b id="n1-v">20</b></label></div>
+    <div class="tiles" id="n1-tiles"></div>
+  </div>
+</figure>
+<div class="split">
+<pre><span class="c">// ✕ N+1: looks like innocent code</span>
+<span class="k">const</span> posts = <span class="k">await</span> db.select().from(posts).limit(<span class="n">20</span>);
+<span class="k">for</span> (<span class="k">const</span> p <span class="k">of</span> posts) {
+  p.author = <span class="k">await</span> db.query.users
+    .findFirst({ where: eq(users.id, p.authorId) });
+}</pre>
+<pre><span class="c">-- ✓ one round trip with a JOIN (or 2 with IN)</span>
+<span class="k">SELECT</span> p.*, u.full_name <span class="k">AS</span> author
+<span class="k">FROM</span> posts p
+<span class="k">JOIN</span> users u <span class="k">ON</span> u.id = p.author_id
+<span class="k">ORDER BY</span> p.created_at <span class="k">DESC</span>
+<span class="k">LIMIT</span> <span class="n">20</span>;</pre>
+</div>
+<p>ORMs make N+1 easy to write by accident, and give you the cure: Django's <code>select_related</code>/<code>prefetch_related</code>, Rails' <code>includes</code>, joins in TypeORM, Prisma and Drizzle. Turn on SQL logging in development to see what your ORM actually runs.</p>
+<h3>2. Indexes</h3>
+<p>No index means a <strong>sequential (full table) scan</strong>: a librarian walking every shelf. A <strong>B-tree index</strong> keeps a sorted copy of the column with pointers to rows: in the example, 4 s on a million rows becomes under 100 ms (lesson 12). But every index costs storage and slows every INSERT, UPDATE and DELETE. Index obvious foreign keys up front; add the rest once tracing shows a slow query.</p>
+<div class="cards">
+  <div class="card"><h4>Composite index</h4><p><code>(user_id, created_at)</code> serves queries on both columns, and on <code>user_id</code> alone, but <strong>not</strong> on <code>created_at</code> alone. Column order matters.</p></div>
+  <div class="card"><h4>Covering index</h4><p>Include every column a hot query needs (e.g. department <code>id</code> + <code>name</code>), so it's answered from the index without touching the table.</p></div>
+</div>
+<p><strong><code>EXPLAIN ANALYZE</code></strong> shows how the database actually ran a query: look for sequential scans on big tables, add an index, and run it again to confirm.</p>
+<div class="split">
+<pre><span class="e">Seq Scan</span> on books
+  (actual time=0.03..412.51 rows=48)
+  Filter: (author_id = 42)
+  Rows Removed by Filter: 999952
+Execution Time: <span class="e">412.61 ms</span></pre>
+<pre><span class="s">Index Scan</span> using idx_books_author_id on books
+  (actual time=0.03..0.09 rows=48)
+  Index Cond: (author_id = 42)
+
+Execution Time: <span class="s">0.12 ms</span></pre>
+</div>
+<h3>3. Connections and pooling</h3>
+<p>Opening a database connection means a TCP handshake, authentication, encryption negotiation, session setup and memory allocated on the server. Doing that per query costs latency, and Postgres only allows a few hundred connections, so a traffic spike can exhaust them. A <strong>pool</strong> keeps connections open: borrow one, run the query, give it back.</p>
+<figure class="anim" id="fig-pool">
+  <figcaption class="anim-title">Internal pools vs an external pooler</figcaption>
+</figure>
+
+<h2 id="caching">Caching, revisited</h2>
+<p>Store the result of an expensive operation so the next request skips it: 800 ms becomes 50 ms. The hard part is keeping it correct. "There are only two hard things in computer science: cache invalidation and naming things."</p>
+<div class="split">
+  <div class="card"><h4>Time-based expiry (TTL)</h4><p>Automatic, but you must guess a good duration per endpoint, based on access patterns and how fresh data must be.</p></div>
+  <div class="card"><h4>Event-based invalidation</h4><p>Delete the cache entry in the same handler that updates the data. Precise, but forget one write path and users see stale data.</p></div>
+</div>
+<div class="cards">
+  <div class="card"><h4>Local cache</h4><p>A map in your server's memory: ~2–3 ms. With 10 servers, though, you get 10 inconsistent copies.</p></div>
+  <div class="card"><h4>Distributed cache</h4><p>Redis, Memcached, Valkey: one shared truth, but every read is a network round trip.</p></div>
+  <div class="card"><h4>Tiered</h4><p>A small local cache for the hottest keys in front of Redis. Most large systems end up here.</p></div>
+</div>
+<div class="table-wrap"><table>
+  <thead><tr><th>Pattern</th><th>On write</th><th>Trade-off</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Cache-aside</strong> (lazy)</td><td>Update the DB, delete the cache key; the next read refills it</td><td>The default. One miss after each change.</td></tr>
+    <tr><td><strong>Write-through</strong></td><td>Update the DB <em>and</em> the cache before responding</td><td>Never stale, but slower writes.</td></tr>
+    <tr><td><strong>Write-behind</strong></td><td>Update the cache, respond, write to the DB asynchronously</td><td>Fastest writes, but cache and DB can diverge if the DB write fails.</td></tr>
+  </tbody>
+</table></div>
+<p><strong>Cache hit rate</strong> is the share of requests served from cache. Around 90% is great; 20% means something is off. It depends on TTL (longer means more hits, but staler data), cache size, and above all how well you understand your users' access patterns.</p>
+
+<h2 id="scaling">Scaling up vs scaling out</h2>
+<figure class="anim" id="fig-scale">
+  <figcaption class="anim-title">Vertical vs horizontal</figcaption>
+</figure>
+<div class="split">
+  <div class="card"><h4>↑ Vertical (scale up)</h4><p>Bigger machine: more cores, more RAM, faster NVMe storage, a 10 Gbps network card. <strong>No code or architecture changes</strong>; double the CPUs, roughly double the capacity, often cheaper than two half-size machines, with no load balancer or distributed state to run. <strong>But:</strong> a hard ceiling (the biggest instance your cloud sells), a single point of failure, and one location, so far-away users always get higher latency.</p></div>
+  <div class="card"><h4>→ Horizontal (scale out)</h4><p>More copies of the server working together: 5 × 1,000 req/s = 5,000 req/s, in theory. No hard ceiling, redundancy when one dies, and servers placed near users. <strong>But:</strong> you need a load balancer (and an algorithm), servers kept in sync, plans for network partitions and conflicting decisions, and health checks to detect dead instances. Part 2 tackles these.</p></div>
+</div>
+<aside class="callout analogy"><div class="tag">Perspective</div><p>Distributed systems don't remove problems; they <strong>exchange</strong> one set of problems for another. Scaling well means choosing the set of problems you'd rather have.</p></aside>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>Latency is what users feel. Track P50, P90 and P99, never just the average.</li>
+  <li>Throughput and latency are linked; latency grows non-linearly as utilization nears 100%. Keep 20–40% headroom for bursts.</li>
+  <li>Measure before fixing: timing logs, profilers and flame graphs (CPU), distributed tracing (I/O).</li>
+  <li>Database first aid: kill N+1 queries, add the right indexes (verify with EXPLAIN ANALYZE), and pool connections, with an external pooler like PgBouncer as you scale out.</li>
+  <li>Caching needs an invalidation plan: TTL or event-based; local, distributed or tiered; cache-aside, write-through or write-behind.</li>
+  <li>Vertical scaling is simple but capped; horizontal scaling has no cap but brings distributed-systems complexity.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Average latency dropped from 120 ms to 90 ms, but complaints went up. How?</summary><div><p>The tail got worse while most requests got faster. Check P95 and P99: a small share of very slow requests can hide inside a better average.</p></div></details>
+  <details><summary>A server runs at 92% CPU on average and "seems fine". Why worry?</summary><div><p>Near full utilization, waiting time explodes, and traffic arrives in bursts. Any spike pushes it past capacity. Add headroom: scale out, or make the work cheaper.</p></div></details>
+  <details><summary>You autoscale from 2 to 8 app servers and Postgres starts refusing connections. Why, and what fixes it?</summary><div><p>Each instance has its own pool (say 8 × 100 = 800 connections) and exceeds the database's limit. Shrink per-instance pools or, better, put an external pooler like PgBouncer between the apps and Postgres.</p></div></details>
+  <details><summary>An index on <code>(user_id, created_at)</code> exists. Does it help <code>WHERE created_at &gt; now() - interval '1 day'</code>?</summary><div><p>Not really: the leading column is <code>user_id</code>. A composite index helps queries that filter on its leftmost column(s).</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+(function () {
+  var share = document.getElementById("pc-share"), slow = document.getElementById("pc-slow");
+  var tiles = document.getElementById("pc-tiles"), dots = document.getElementById("pc-dots");
+  function rng(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; var t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function pct(sorted, p) { return sorted[Math.min(sorted.length - 1, Math.ceil(p / 100 * sorted.length) - 1)]; }
+  function fmt(ms) { return ms >= 1000 ? (ms / 1000).toFixed(1) + " s" : Math.round(ms) + " ms"; }
+  function render() {
+    var r = rng(7), n = 1000, s = +share.value, sl = +slow.value * 1000, lat = [];
+    document.getElementById("pc-share-v").textContent = s + "%";
+    document.getElementById("pc-slow-v").textContent = (+slow.value) + " s";
+    var slowCount = Math.round(n * s / 100);
+    for (var i = 0; i < n; i++) {
+      var v = i < slowCount ? sl * (0.8 + r() * 0.4) : 18 + Math.pow(r(), 2) * 45 + (r() < 0.03 ? 40 + r() * 120 : 0);
+      lat.push(v);
+    }
+    var sorted = lat.slice().sort(function (a, b) { return a - b; });
+    var avg = lat.reduce(function (a, b) { return a + b; }, 0) / n;
+    var p50 = pct(sorted, 50), p90 = pct(sorted, 90), p99 = pct(sorted, 99);
+    var cls = function (v) { return v > 1000 ? "bad" : v > 100 ? "warn" : "ok"; };
+    tiles.innerHTML = [["Average", avg], ["P50", p50], ["P90", p90], ["P99", p99]].map(function (t) { return '<div class="tile ' + cls(t[1]) + '"><small>' + t[0] + "</small><b>" + fmt(t[1]) + "</b></div>"; }).join("");
+    var cols = 50, gap = 14, svgW = cols * gap + 4, rows = Math.ceil(n / cols), out = '<svg viewBox="0 0 ' + svgW + " " + (rows * gap + 4) + '" class="fit" role="img" aria-label="1000 requests sorted by latency">';
+    sorted.forEach(function (v, k) {
+      var x = (k % cols) * gap + 9, y = Math.floor(k / cols) * gap + 9;
+      var c = v > 1000 ? "var(--bad)" : v > 100 ? "var(--warn)" : "var(--ok)";
+      out += '<circle cx="' + x + '" cy="' + y + '" r="5" fill="' + c + '"><title>request ' + (k + 1) + ": " + fmt(v) + "</title></circle>";
+    });
+    dots.innerHTML = out + "</svg>";
+  }
+  share.addEventListener("input", render); slow.addEventListener("input", render); render();
+})();
+
+(function () {
+  var r = document.getElementById("ut-r"), v = document.getElementById("ut-v"), tiles = document.getElementById("ut-tiles"), host = document.getElementById("ut-chart");
+  var W = 640, H = 230, L = 66, B = 30, T = 12, R = 12, S = 20, maxY = 1000;
+  var sx = function (u) { return L + u * (W - L - R); }, sy = function (ms) { return T + (1 - Math.min(ms, maxY) / maxY) * (H - T - B); };
+  var path = "";
+  for (var u = 0; u <= 0.985; u += 0.005) path += (path ? "L" : "M") + sx(u).toFixed(1) + "," + sy(S / (1 - u)).toFixed(1);
+  var grid = "";
+  [0, 250, 500, 750, 1000].forEach(function (y) { grid += '<line class="chart-grid" x1="' + L + '" x2="' + (W - R) + '" y1="' + sy(y) + '" y2="' + sy(y) + '"/><text class="chart-axis" x="' + (L - 8) + '" y="' + (sy(y) + 4) + '" text-anchor="end">' + y + (y === 1000 ? "+" : "") + " ms</text>"; });
+  [0, 25, 50, 75, 100].forEach(function (x) { grid += '<text class="chart-axis" x="' + sx(x / 100) + '" y="' + (H - 10) + '" text-anchor="middle">' + x + "%</text>"; });
+  host.innerHTML = '<svg viewBox="0 0 ' + W + " " + H + '" class="fit" role="img" aria-label="Latency rises sharply as utilization approaches 100%">' + grid +
+    '<path class="chart-line" d="' + path + '"/><line id="ut-guide" class="chart-grid" stroke-dasharray="4 4"/><circle id="ut-dot" class="chart-dot" r="6"/></svg>';
+  function render() {
+    var u = +r.value / 100, t = S / (1 - u), q = u * u / (1 - u);
+    v.textContent = r.value + "%";
+    var d = host.querySelector("#ut-dot"), g = host.querySelector("#ut-guide");
+    d.setAttribute("cx", sx(u)); d.setAttribute("cy", sy(t));
+    g.setAttribute("x1", sx(u)); g.setAttribute("x2", sx(u)); g.setAttribute("y1", sy(t)); g.setAttribute("y2", H - B);
+    var c = t > 400 ? "bad" : t > 100 ? "warn" : "ok";
+    tiles.innerHTML = '<div class="tile"><small>Work per request</small><b>20 ms</b></div><div class="tile ' + c + '"><small>Time in system</small><b>' + (t >= 1000 ? (t / 1000).toFixed(1) + " s" : Math.round(t) + " ms") + '</b></div><div class="tile ' + c + '"><small>Requests queued ahead</small><b>' + q.toFixed(1) + "</b></div>";
+  }
+  r.addEventListener("input", render); render();
+})();
+
+BD.timeline("#fig-guess", {
+  lanes: ["Request", "Redis cache", "DB query", "Remote log (sync)"],
+  total: 540, unit: "ms", ticks: 6, labelW: 130,
+  legend: [{ k: "server", label: "request" }, { k: "cache", label: "cache" }, { k: "db", label: "database" }, { k: "bad", label: "the real culprit" }],
+  segs: [
+    { lane: 0, s: 0, d: 530, k: "server", t: "GET /products/42 · 530 ms" },
+    { lane: 1, s: 5, d: 5, k: "cache" },
+    { lane: 2, s: 12, d: 10, k: "db" },
+    { lane: 3, s: 25, d: 500, k: "bad", t: "await logger.send() · 500 ms" }
+  ],
+  steps: [
+    { to: 25, note: "The team assumed \"the database is slow\" and spent a week adding Redis. Timing every step shows the cache at 5 ms and the DB query at just <b>10 ms</b>…" },
+    { to: 540, note: "…while a <b>synchronous</b> call to a remote logging service blocks the response for 500 ms. Make logging asynchronous and the endpoint drops to ~30 ms. Measure first." }
+  ]
+});
+
+(function () {
+  var n = document.getElementById("n1-n"), out = document.getElementById("n1-tiles");
+  function render() {
+    var N = +n.value; document.getElementById("n1-v").textContent = N;
+    var q = N + 1, t = q * 5;
+    out.innerHTML = '<div class="tile bad"><small>N+1 queries</small><b>' + q + '</b></div><div class="tile bad"><small>at 5 ms each</small><b>' + (t >= 1000 ? (t / 1000).toFixed(1) + " s" : t + " ms") + '</b></div><div class="tile ok"><small>JOIN / bulk queries</small><b>1–2</b></div><div class="tile ok"><small>at 5 ms each</small><b>5–10 ms</b></div>';
+  }
+  n.addEventListener("input", render); render();
+})();
+
+BD.flow("#fig-pool", {
+  w: 720, h: 290,
+  nodes: {
+    a1: { x: 90, y: 50, label: "App #1", sub: "pool: 150", kind: "server", w: 120 },
+    a2: { x: 90, y: 145, label: "App #2", sub: "pool: 150", kind: "server", w: 120 },
+    a3: { x: 90, y: 240, label: "App #3", sub: "pool: 150", kind: "server", w: 120 },
+    pgb: { x: 360, y: 145, label: "PgBouncer", sub: "not used yet", kind: "net", w: 140 },
+    db: { x: 610, y: 145, label: "Postgres", sub: "max 300 connections", kind: "db", shape: "cyl", w: 170, h: 70 }
+  },
+  edges: [["a1", "pgb"], ["a2", "pgb"], ["a3", "pgb"], ["pgb", "db"]],
+  steps: [
+    { path: [["a1", "db"], ["a2", "db"]], dim: ["a3", "pgb"], set: { db: "300 / 300 in use" }, warn: ["db"], note: "Two instances, each with an <b>internal pool</b> of up to 150 connections: up to 300 total, exactly the database's limit." },
+    { path: [["a1", "db"], ["a2", "db"], ["a3", "db"]], dim: ["pgb"], bad: ["db", "a3"], set: { db: "450 requested ✕", a3: "autoscaled in" }, note: "A traffic spike triggers autoscaling and a third instance appears. 3 × 150 = 450 > 300, and the database starts <b>refusing connections</b>." },
+    { path: [["a1", "pgb"], ["a2", "pgb"], ["a3", "pgb"]], fresh: true, hl: ["pgb"], set: { pgb: "shared pool: 280", a1: "→ PgBouncer", a2: "→ PgBouncer", a3: "→ PgBouncer" }, note: "Put an <b>external pooler</b> like PgBouncer in between. Every instance borrows from one shared pool…" },
+    { path: ["pgb", "db"], tone: "ok", ok: ["db", "pgb"], set: { pgb: "shared pool: 280", db: "≤ 280 in use ✓", a1: "→ PgBouncer", a2: "→ PgBouncer", a3: "→ PgBouncer" }, note: "…so however many app servers you add, Postgres never sees more than the pooler's cap." }
+  ]
+});
+
+BD.flow("#fig-scale", {
+  w: 720, h: 260,
+  nodes: {
+    lb: { x: 90, y: 130, label: "Traffic", sub: "growing", kind: "client", w: 120 },
+    big: { x: 330, y: 130, label: "1 server", sub: "4 cores · 8 GB", kind: "server", w: 150, h: 60 },
+    s1: { x: 600, y: 45, label: "Server", sub: "", kind: "server", w: 120, h: 46 },
+    s2: { x: 600, y: 130, label: "Server", sub: "", kind: "server", w: 120, h: 46 },
+    s3: { x: 600, y: 215, label: "Server", sub: "", kind: "server", w: 120, h: 46 }
+  },
+  edges: [["lb", "big"], ["lb", "s1", { dashed: true }], ["lb", "s2", { dashed: true }], ["lb", "s3", { dashed: true }]],
+  steps: [
+    { path: ["lb", "big"], dim: ["s1", "s2", "s3"], note: "One modest server handles today's traffic." },
+    { path: ["lb", "big"], hl: ["big"], set: { big: "32 cores · 96 GB" }, dim: ["s1", "s2", "s3"], note: "<b>Scale up:</b> replace it with a bigger machine. Same code, same architecture, simple." },
+    { path: ["lb", "big"], bad: ["big"], set: { big: "max size · crashed ✕" }, dim: ["s1", "s2", "s3"], note: "But there's a biggest machine you can buy, and when it crashes the whole service is down. It's also in one region, far from some users." },
+    { path: [["lb", "s1"], ["lb", "s2"], ["lb", "s3"]], fresh: true, dim: ["big"], ok: ["s1", "s2", "s3"], set: { lb: "load balancer" }, note: "<b>Scale out:</b> many copies behind a load balancer. Add more as traffic grows, survive the loss of one, and place them near users…" },
+    { path: [["lb", "s1"], ["lb", "s3"]], fresh: true, dim: ["big"], bad: ["s2"], ok: ["s1", "s3"], set: { lb: "load balancer", s2: "down ✕" }, note: "…when one dies, traffic shifts to the others. The price: load balancing, health checks, shared state and partitions. That's part 2." }
+  ]
+});
+</script>
+</body>
+</html>

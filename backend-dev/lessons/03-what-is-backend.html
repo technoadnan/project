@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What is a backend? · Backend Dev</title>
+<meta name="description" content="Follow a request from DNS to an EC2 box, and see why the browser can&#x27;t do it all.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="03">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 3</span><span>Video · 19:01</span></div>
+  <h1>What is a backend, how does it work and why do we need it?</h1>
+  <p class="lead">A backend is a computer that <strong>listens on an open port</strong> (usually 80 or 443) for requests coming over the internet, and either <strong>serves</strong> something (HTML, images, JSON) or <strong>accepts</strong> data. Strip its job down to one word and you get: <strong>data</strong>.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>The real hops a request takes: DNS, firewall, reverse proxy, your app</li><li>Why apps need one central server</li><li>How a frontend actually runs in your browser</li><li>Four reasons the backend can't just live in the browser</li></ul></div>
+</div>
+<h2 id="definition">A computer listening on a port</h2>
+<p>"Server" literally means something that <em>serves</em>. It waits for HTTP, WebSocket or gRPC requests on a port that's reachable from the internet, then responds with static files (HTML, JS, images) or data (usually JSON). It also accepts data the client sends.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>Think of a building with numbered doors. The <strong>IP address</strong> is the street address, the <strong>port</strong> is the door number, and the server is the person waiting behind door 443 to answer whoever knocks.</p></aside>
+
+<h2 id="journey">Following a real request</h2>
+<p>The video traces a live request to <code>backend-demo.&lt;domain&gt;/users</code>, a Node.js app on an AWS EC2 instance. Here are the hops:</p>
+<figure class="anim" id="fig-hops">
+  <figcaption class="anim-title">Browser → DNS → firewall → Nginx → your app</figcaption>
+</figure>
+<div class="cards">
+  <div class="card"><h4>DNS records</h4><p>An <strong>A record</strong> maps a name to an IP address. A <strong>CNAME</strong> maps a name to another name.</p></div>
+  <div class="card"><h4>Firewall</h4><p>The AWS security group only lets in the ports you allow: 22 (SSH), 80 (HTTP) and 443 (HTTPS). Everything else is dropped before it reaches the machine.</p></div>
+  <div class="card"><h4>Reverse proxy</h4><p>Nginx sits in front of your apps, redirects HTTP to HTTPS (with Certbot certificates) and forwards each domain to the right local port.</p></div>
+  <div class="card"><h4>Your process</h4><p>The Node app listens on <code>localhost:3001</code>, kept alive by a process manager (PM2). The same request on the box itself gets the same response.</p></div>
+</div>
+<aside class="callout note"><div class="tag">Notice</div><p>On your laptop, <code>localhost:3000/users</code> works directly. In production, DNS, the firewall and the proxy are just extra hops that eventually deliver the request to the same kind of local process.</p></aside>
+
+<h2 id="why">Why do we need a backend at all?</h2>
+<p>Take a single Instagram like. Between your tap and your friend's notification, something has to know about <em>both</em> of you.</p>
+<figure class="anim" id="fig-like">
+  <figcaption class="anim-title">What happens when you tap "like"</figcaption>
+</figure>
+<p>Your app only knows <em>your</em> world: your feed and the people you follow. The server must hold everyone's state in one place. That's why it's <strong>centralised</strong>, and why its whole job revolves around <strong>data</strong>: fetching it, receiving it and persisting it.</p>
+
+<h2 id="frontend">How a frontend actually works</h2>
+<p>A frontend server (here, a Next.js app on the same EC2 box behind the same Nginx, on port 3000) doesn't run your logic. It ships <em>code</em> to the browser, and the browser runs it.</p>
+<figure class="anim" id="fig-frontend">
+  <figcaption class="anim-title">Loading a frontend: the code travels to you</figcaption>
+</figure>
+<div class="table-wrap"><table>
+  <thead><tr><th></th><th>Frontend</th><th>Backend</th></tr></thead>
+  <tbody>
+    <tr><td>What travels</td><td>The <strong>code</strong> travels to the user</td><td>The <strong>request</strong> travels to the code</td></tr>
+    <tr><td>Who runs it</td><td>The user's browser</td><td>Your server</td></tr>
+    <tr><td>Environment</td><td>Sandboxed, untrusted device</td><td>Full OS access, machine you control</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="not-browser">Why not put backend logic in the browser?</h2>
+<p>The browser runs code it downloaded from strangers, so it locks that code in a <strong>sandbox</strong>: only the DOM, a few browser APIs (localStorage, cookies) and limited network calls.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>The browser is like a hotel room for visiting code. Guests can use what's in the room, but they can't wander into the building's control room, open other guests' doors or carry the safe out. That protects you, and it also makes the room a terrible place to run a business.</p></aside>
+<div class="cards">
+  <div class="card"><h4><span class="k">1</span> Security sandbox</h4><p>Backends need the file system (log files) and environment variables (secrets). Browsers forbid both, by design.</p></div>
+  <div class="card"><h4><span class="k">2</span> CORS</h4><p>Browsers block calls to other domains unless those APIs send the right headers. Backends must call any service they need.</p></div>
+  <div class="card"><h4><span class="k">3</span> Databases</h4><p>Native drivers need raw sockets, binary data and persistent connections. Servers keep a shared <strong>connection pool</strong>; a million browsers would each open their own.</p></div>
+  <div class="card"><h4><span class="k">4</span> Computing power</h4><p>Users might be on a 256 MB, single-core phone. A central server can be given more CPU and RAM whenever load grows.</p></div>
+</div>
+<aside class="callout analogy"><div class="tag">Analogy: connection pools</div><p>A bank doesn't hand every customer a key to the vault. A few tellers (pooled connections) serve thousands of customers in turn. Letting every browser connect to the database is like giving everyone a vault key and letting them all crowd in at once.</p></aside>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>A backend is a computer listening on an open port, serving content or accepting data.</li>
+  <li>A production request hops: DNS (name → IP) → firewall (allowed ports) → reverse proxy (domain → local port) → your app.</li>
+  <li>Backends exist to hold <strong>centralised state</strong>. Their one-word job is data.</li>
+  <li>Frontend code is downloaded and run by the browser; backend code runs on your server.</li>
+  <li>Browser sandboxing, CORS, database connection needs and unpredictable device power keep backend logic on the server.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Your DNS is correct, the app is running, but requests time out. Port 443 is missing from the security group. What happens?</summary><div><p>The cloud firewall drops the traffic before it reaches the instance, so Nginx and your app never see the request.</p></div></details>
+  <details><summary>What does the reverse proxy decide?</summary><div><p>Which local process gets the request, based on the domain (server_name). For example frontend-demo → port 3000 and backend-demo → port 3001. It also handles the HTTP → HTTPS redirect and TLS certificates.</p></div></details>
+  <details><summary>Give two reasons a browser can't talk to Postgres directly.</summary><div><p>Browsers can't open raw TCP sockets or keep the persistent binary connections native drivers need. And even if they could, every user would open their own connection, overwhelming the database with no shared pooling. (It would also expose credentials.)</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.seq("#fig-hops", {
+  actors: ["Browser", "DNS", "AWS firewall", "Nginx", "Node app :3001"],
+  colW: 150,
+  steps: [
+    { from: 0, to: 1, label: "backend-demo.xyz?", note: "The browser asks <b>DNS</b> where the subdomain lives." },
+    { from: 1, to: 0, label: "A record → 13.x.x.x", ret: true, note: "An <b>A record</b> points the name at the EC2 instance's public IP." },
+    { from: 0, to: 2, label: "GET /users :443", note: "The request travels to that IP. The cloud <b>firewall</b> (security group) checks the port first." },
+    { over: 2, text: "443 allowed ✓", note: "Port 443 (HTTPS) is in the allow list, so the traffic gets through. Without it the request dies here.", tone: "ok" },
+    { from: 2, to: 3, label: "forward", note: "On the instance, <b>Nginx</b> receives it. HTTP on port 80 would be redirected to HTTPS." },
+    { from: 3, to: 4, label: "proxy_pass localhost:3001", note: "Nginx matches <code>server_name</code> and forwards to the Node process on port 3001." },
+    { from: 4, to: 3, label: "200 · JSON users", ret: true, tone: "ok", note: "The app does the real work and responds." },
+    { from: 3, to: 0, label: "200 · JSON users", ret: true, tone: "ok", note: "The response flows back through the proxy to the browser." }
+  ]
+});
+BD.flow("#fig-like", {
+  w: 720, h: 260,
+  nodes: {
+    you: { x: 80, y: 70, label: "Your phone", sub: "tap ♥", kind: "client", w: 120 },
+    srv: { x: 330, y: 70, label: "Server", sub: "", kind: "server", w: 130 },
+    db: { x: 330, y: 205, label: "Database", sub: "likes table", kind: "db", shape: "cyl", w: 130, h: 62 },
+    notif: { x: 560, y: 70, label: "Notifier", sub: "push service", kind: "queue", w: 120 },
+    friend: { x: 560, y: 205, label: "Friend's phone", sub: "", kind: "client", w: 130 }
+  },
+  edges: [["you", "srv"], ["srv", "db"], ["srv", "notif"], ["notif", "friend"]],
+  steps: [
+    { path: ["you", "srv"], packet: "POST /like", hl: ["srv"], note: "Your app sends a request: <i>this user liked this post</i>." },
+    { path: ["srv"], hl: ["srv"], set: { srv: "who is this?" }, note: "The server parses it and works out <b>who you are</b> from the request." },
+    { path: ["srv", "db"], hl: ["db"], set: { srv: "save like" }, note: "It <b>persists</b> the like in the database so it survives restarts." },
+    { path: ["srv", "db", "srv"], hl: ["db"], set: { srv: "find post owner" }, note: "It looks up <b>whose post</b> it was. Only a central server knows both users." },
+    { path: ["srv", "notif", "friend"], tone: "ok", ok: ["friend"], set: { friend: "🔔 new like", srv: "done" }, note: "It triggers a notification, and your friend's phone lights up." }
+  ]
+});
+BD.seq("#fig-frontend", {
+  actors: ["Browser", "Next.js server"],
+  steps: [
+    { from: 0, to: 1, label: "GET /", note: "First request: the <b>HTML document</b>." },
+    { from: 1, to: 0, label: "index.html", ret: true, note: "The HTML lists every other resource the page needs." },
+    { from: 0, to: 1, label: "GET app.js, style.css, fonts", note: "The browser fetches JS, CSS, fonts and images in separate requests." },
+    { from: 1, to: 0, label: "files", ret: true, note: "These are just files. The server isn't running your app logic." },
+    { from: 0, to: 0, label: "paint (CSS)", note: "With CSS loaded, the browser <b>paints</b> the page: colours, fonts, layout." },
+    { from: 0, to: 0, label: "hydrate (run JS)", tone: "ok", note: "With JS loaded, it attaches event listeners (<b>hydration</b>). Buttons now work because <i>your browser</i> runs the code." }
+  ]
+});
+</script>
+</body>
+</html>

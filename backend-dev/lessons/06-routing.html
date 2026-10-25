@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Routing · Backend Dev</title>
+<meta name="description" content="How method + path find the right handler: static, dynamic, query, nested and grouped routes.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="06">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 6</span><span>Video · 24:04</span></div>
+  <h1>What is routing in backend?</h1>
+  <p class="lead">The HTTP method says <strong>what</strong> you want to do; the route says <strong>where</strong>. Routing is the server taking that pair, like <code>GET /api/books</code>, and mapping it to the one handler that knows how to respond.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Why method + path together form the routing key</li><li>Static vs dynamic routes, and path vs query parameters</li><li>Nested routes and the meaning they express</li><li>Versioning, deprecation and catch-all routes</li></ul></div>
+</div>
+<h2 id="what-where">Method + path = a unique key</h2>
+<p>A request arrives as <code>GET /api/books</code>. The server combines the method and the path into one key and looks up a handler, which then runs the business logic, talks to the database and returns data.</p>
+<p>That's why <code>GET /api/books</code> (list books) and <code>POST /api/books</code> (create a book) never clash: same path, different keys.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>Think of an office reception desk. "Deliver" or "pick up" is the <strong>method</strong>, and "Floor 3, Room 12" is the <strong>path</strong>. Reception looks at both and sends you to exactly one person. The same room can have one person for deliveries and another for pickups.</p></aside>
+
+<h2 id="try">Watch a router match requests</h2>
+<p>Pick a request (or type your own). The router checks each registered route in order until one matches, then pulls the parameters out of the URL.</p>
+<figure class="anim" id="fig-router">
+  <figcaption class="anim-title">Try it: the route table</figcaption>
+  <div class="widget">
+    <div class="presets" id="rt-presets"></div>
+    <div class="row" style="margin-top:12px">
+      <select id="rt-method" aria-label="HTTP method"><option>GET</option><option>POST</option><option>PATCH</option><option>DELETE</option></select>
+      <input type="text" id="rt-path" value="/api/users/123/posts/456" aria-label="Request path" style="flex:1;min-width:200px;font-family:var(--mono)">
+      <button class="act" id="rt-go" type="button">Send ▶</button>
+    </div>
+    <table class="rt" id="rt-table"></table>
+    <pre id="rt-out" style="margin:12px 0 0;min-height:4.5em">Press Send to route the request.</pre>
+  </div>
+</figure>
+
+<h2 id="static-dynamic">Static and dynamic routes</h2>
+<div class="split">
+  <div class="card"><h4>Static route</h4><p><code>/api/books</code> is a fixed string with no variables. It always points to the same handler and returns the same kind of data.</p></div>
+  <div class="card"><h4>Dynamic route</h4><p><code>/api/users/:id</code> has a slot. <code>/api/users/123</code> fills <code>id</code> with <code>"123"</code>. The colon syntax is the convention in almost every language and framework.</p></div>
+</div>
+<aside class="callout warn"><div class="tag">Gotcha</div><p>Everything in a URL is a <strong>string</strong>. <code>123</code> arrives as <code>"123"</code>, and converting it to a number is your job (lesson 9: transformations).</p></aside>
+<p>Read a dynamic route out loud and it explains itself: <em>GET</em> me the data at <em>/api/users</em> for the user with id <em>123</em>. That human readability is a core goal of REST.</p>
+
+<h2 id="params">Path parameters vs query parameters</h2>
+<div class="url-anatomy"><span class="u-static">/api/users/</span><span class="u-param">123</span><span class="u-static">/posts</span><span class="u-query">?page=2&amp;limit=20&amp;sort=desc</span></div>
+<p class="small muted"><span class="chip">static</span> <span class="chip acc">path parameter</span> <span class="chip warn">query parameters</span></p>
+<ul>
+  <li><strong>Path parameters</strong> are part of the route and carry <strong>meaning</strong>: <em>which</em> resource you're talking about.</li>
+  <li><strong>Query parameters</strong> are key–value pairs after the <code>?</code> carrying <strong>metadata</strong>: how you want it (search terms, page, limit, filters, sort order).</li>
+</ul>
+<p>Why not put a search term in the path, like <code>/api/search/some value</code>? It technically works, but it's hard to maintain and loses the semantic meaning of a path. And since GET requests have no body, the query string is the natural place for these options.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>The path is the shelf number of a book in a library: it identifies <em>the thing</em>. Query parameters are what you tell the librarian: "only paperbacks, newest first, 20 at a time."</p></aside>
+<h3>Example: pagination</h3>
+<pre><span class="c">// GET /api/books           → page 1 by default</span>
+{
+  <span class="s">"data"</span>: [ <span class="c">/* 20 books */</span> ],
+  <span class="s">"total"</span>: <span class="n">100</span>, <span class="s">"page"</span>: <span class="n">1</span>, <span class="s">"totalPages"</span>: <span class="n">5</span>, <span class="s">"limit"</span>: <span class="n">20</span>
+}
+<span class="c">// next page:  GET /api/books?page=2</span></pre>
+
+<h2 id="nested">Nested routes</h2>
+<p>Nesting isn't a separate routing feature; it's a convention for expressing relationships. Each level is its own route with its own handler:</p>
+<figure class="anim" data-steps id="fig-nested">
+  <figcaption class="anim-title">Each level of nesting means something new</figcaption>
+  <div class="frame" data-note="All users.">
+    <div class="url-anatomy"><span class="u-static">GET /api/users</span></div>
+  </div>
+  <div class="frame" data-note="One user: the one with id 123.">
+    <div class="url-anatomy"><span class="u-static">GET /api/users/</span><span class="u-param">123</span></div>
+  </div>
+  <div class="frame" data-note="All posts <b>belonging to</b> user 123.">
+    <div class="url-anatomy"><span class="u-static">GET /api/users/</span><span class="u-param">123</span><span class="u-static">/posts</span></div>
+  </div>
+  <div class="frame" data-note="One specific post (456) of user 123. Two dynamic parameters, four distinct routes so far.">
+    <div class="url-anatomy"><span class="u-static">GET /api/users/</span><span class="u-param">123</span><span class="u-static">/posts/</span><span class="u-param">456</span></div>
+  </div>
+</figure>
+
+<h2 id="versioning">Versioning and deprecation</h2>
+<p>Requirements change. Maybe a new mobile app needs <code>title</code> instead of <code>name</code>. Rather than inventing <code>/api/new-products</code>, put a version in the route:</p>
+<div class="split">
+  <div><h5 class="small muted" style="margin:0 0 6px">GET /api/v1/products</h5><pre>{ <span class="s">"data"</span>: [
+  { <span class="s">"id"</span>: <span class="n">1</span>, <mark><span class="s">"name"</span></mark>: <span class="s">"Lamp"</span>, <span class="s">"price"</span>: <span class="n">20</span> }
+] }</pre></div>
+  <div><h5 class="small muted" style="margin:0 0 6px">GET /api/v2/products</h5><pre>{ <span class="s">"data"</span>: [
+  { <span class="s">"id"</span>: <span class="n">1</span>, <mark><span class="s">"title"</span></mark>: <span class="s">"Lamp"</span>, <span class="s">"price"</span>: <span class="n">20</span> }
+] }</pre></div>
+</div>
+<figure class="anim" id="fig-deprecate">
+  <figcaption class="anim-title">A safe breaking change</figcaption>
+</figure>
+
+<h2 id="catch-all">Catch-all route</h2>
+<p>Registered last, <code>*</code> catches anything nothing else matched, like <code>/api/v3/products</code>. Instead of an empty or confusing default, it returns a friendly <strong>404</strong>: "this route doesn't exist". Try it in the router above.</p>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>Routing maps method (what) + path (where) to a handler. Same path with different methods means different handlers.</li>
+  <li>Static routes are fixed strings; dynamic routes have <code>:param</code> slots, whose values always arrive as strings.</li>
+  <li>Path params identify the resource; query params carry options such as search, pagination, filters and sorting.</li>
+  <li>Nested routes express relationships: <code>/users/123/posts/456</code>.</li>
+  <li>Version routes (<code>/v1</code>, <code>/v2</code>) to ship breaking changes with a migration window, then deprecate.</li>
+  <li>A catch-all route at the end returns a clear 404 for unknown paths.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Where should "sort by price, descending" go: path or query?</summary><div><p>Query: <code>?sort=price&amp;order=desc</code>. It's an option about <em>how</em> to return the data, not which resource it is.</p></div></details>
+  <details><summary>Why must the catch-all route be registered last?</summary><div><p>Routers usually match in order. A <code>*</code> registered first would swallow every request before the specific routes got a chance.</p></div></details>
+  <details><summary>Your handler does <code>if (params.id === 123)</code> and it's never true. Why?</summary><div><p>Path params are strings: <code>"123" !== 123</code>. Transform (parse) the value first.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+(function () {
+  var routes = [
+    ["GET", "/api/books", "listBooks"],
+    ["POST", "/api/books", "createBook"],
+    ["GET", "/api/users/:id", "getUser"],
+    ["GET", "/api/users/:id/posts", "listUserPosts"],
+    ["GET", "/api/users/:id/posts/:postId", "getUserPost"],
+    ["GET", "/api/search", "search"],
+    ["GET", "/api/v1/products", "listProductsV1"],
+    ["GET", "/api/v2/products", "listProductsV2"],
+    ["*", "*", "notFound (catch-all)"]
+  ];
+  var presets = [["GET", "/api/books"], ["POST", "/api/books"], ["GET", "/api/users/123"], ["GET", "/api/users/123/posts/456"], ["GET", "/api/search?q=some+value&page=2"], ["GET", "/api/v2/products"], ["GET", "/api/v3/products"]];
+  var table = document.getElementById("rt-table"), out = document.getElementById("rt-out");
+  var m = document.getElementById("rt-method"), p = document.getElementById("rt-path");
+  routes.forEach(function (r) {
+    var tr = document.createElement("tr");
+    tr.innerHTML = "<td>" + r[0] + "</td><td>" + r[1] + "</td><td>→ " + r[2] + "</td>";
+    table.appendChild(tr);
+  });
+  var pre = document.getElementById("rt-presets");
+  presets.forEach(function (x) {
+    var b = document.createElement("button");
+    b.type = "button"; b.textContent = x[0] + " " + x[1];
+    b.addEventListener("click", function () { m.value = x[0]; p.value = x[1]; run(); });
+    pre.appendChild(b);
+  });
+  function match(pattern, path) {
+    if (pattern === "*") return {};
+    var a = pattern.split("/").filter(Boolean), b = path.split("/").filter(Boolean);
+    if (a.length !== b.length) return null;
+    var params = {};
+    for (var i = 0; i < a.length; i++) {
+      if (a[i][0] === ":") params[a[i].slice(1)] = decodeURIComponent(b[i]);
+      else if (a[i] !== b[i]) return null;
+    }
+    return params;
+  }
+  var timer = null;
+  function run() {
+    clearTimeout(timer);
+    var raw = p.value.trim() || "/";
+    var qi = raw.indexOf("?"), path = qi === -1 ? raw : raw.slice(0, qi), qs = qi === -1 ? "" : raw.slice(qi + 1);
+    var rows = table.querySelectorAll("tr");
+    rows.forEach(function (r) { r.className = ""; });
+    out.textContent = "Matching " + m.value + " " + path + " …";
+    var i = 0;
+    var step = function () {
+      if (i > 0) rows[i - 1].className = "miss";
+      var r = routes[i];
+      rows[i].className = "checking";
+      var params = (r[0] === "*" || r[0] === m.value) ? match(r[1], path) : null;
+      if (params) {
+        timer = setTimeout(function () {
+          rows[i].className = "hit";
+          var query = {};
+          if (qs) qs.split("&").forEach(function (kv) { var s = kv.split("="); if (s[0]) query[decodeURIComponent(s[0])] = decodeURIComponent((s[1] || "").replace(/\+/g, " ")); });
+          var status = r[0] === "*" ? "404 Not Found" : (m.value === "POST" ? "201 Created" : "200 OK");
+          out.innerHTML = "handler: <b>" + r[2] + "</b>\nparams:  " + JSON.stringify(params) + "\nquery:   " + JSON.stringify(query) + "\nstatus:  " + status;
+        }, BD.reduce ? 0 : 260);
+        return;
+      }
+      i++;
+      timer = setTimeout(step, BD.reduce ? 0 : 260);
+    };
+    step();
+  }
+  document.getElementById("rt-go").addEventListener("click", run);
+  p.addEventListener("keydown", function (e) { if (e.key === "Enter") run(); });
+})();
+
+BD.timeline("#fig-deprecate", {
+  lanes: ["/api/v1", "/api/v2"],
+  total: 12, unit: " wk", ticks: 6, labelW: 80,
+  legend: [{ k: "ok", label: "live" }, { k: "io", label: "deprecated (still works)" }, { k: "cpu", label: "new version" }],
+  segs: [
+    { lane: 0, s: 0, d: 4, k: "ok", t: "v1 live" }, { lane: 0, s: 4, d: 5, k: "io", t: "deprecated: migrate!" },
+    { lane: 1, s: 4, d: 8, k: "cpu", t: "v2 live" }
+  ],
+  steps: [
+    { to: 4, note: "Clients use <b>v1</b>. New requirements need a breaking change to the response shape." },
+    { to: 5, note: "<b>v2</b> ships alongside v1. v1 is marked <b>deprecated</b> and client teams get notice." },
+    { to: 9, note: "During the migration window both versions work, so clients move at their own pace without breaking." },
+    { to: 12, note: "The window closes and v1 is removed. Only v2 remains." }
+  ]
+});
+</script>
+</body>
+</html>

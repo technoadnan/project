@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why first principles · Backend Dev</title>
+<meta name="description" content="Why patterns beat frameworks, and how first principles make you language-agnostic.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="04">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 4</span><span>Video · 10:11</span></div>
+  <h1>Benefits of learning backend from first principles</h1>
+  <p class="lead">First principles are the <strong>foundational components every backend revolves around</strong>, whatever its size or language: routing, validation, middleware, data access, auth, errors. Know them as concepts and any new language or codebase becomes a matter of syntax.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Six concrete benefits of learning this way</li><li>How to go from Node.js to production Rust in days, not months</li><li>Why patterns beat language labels</li></ul></div>
+</div>
+<h2 id="scenarios">Three situations you'll face</h2>
+<ul>
+  <li>You're a frontend dev asked to fix a bug in a backend written in a language you don't know. Where do you even start?</li>
+  <li>You need to build an API from scratch. How do you form a mental map, follow standards and avoid breaking things?</li>
+  <li>You write TypeScript or Go, and suddenly the team needs Rust or Python. How do you get productive without drowning in FastAPI, Pydantic, Axum or SQLAlchemy docs?</li>
+</ul>
+<p>In all three, the answer is the same: break the system into its basic, universal parts.</p>
+
+<h2 id="benefits">Six benefits</h2>
+<div class="cards">
+  <div class="card"><h4><span class="k">1</span> See the big picture</h4><p>Mentally split any codebase into routing, core logic, DB access, and the over-engineered noise you can ignore.</p></div>
+  <div class="card"><h4><span class="k">2</span> Faster onboarding</h4><p>Once you know how auth, routing and middleware work, a new framework's syntax is secondary.</p></div>
+  <div class="card"><h4><span class="k">3</span> 10× faster new projects</h4><p>Structure routes, DB connections, caching, logging and errors from understanding, not from boilerplate tutorials.</p></div>
+  <div class="card"><h4><span class="k">4</span> Less syntax fatigue</h4><p>You already know what to build next, so a new language is "just" new spelling.</p></div>
+  <div class="card"><h4><span class="k">5</span> Right tool for the job</h4><p>Redis for caching, Postgres for relational data, MongoDB for unstructured data, Kafka for event streams, regardless of your current stack.</p></div>
+  <div class="card"><h4><span class="k">6</span> More employable</h4><p>Teams want engineers who can join any stack and contribute quickly.</p></div>
+</div>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>A good mechanic can open the hood of a car they've never seen and immediately point out the engine, battery and radiator. Senior engineers do the same with codebases. It isn't magic, it's pattern recognition, and you can train it on purpose instead of waiting years.</p></aside>
+
+<h2 id="same-pattern">Same pattern, different spelling</h2>
+<p>Here is one endpoint, "get a user by id, only for logged-in users", in four ecosystems. Step through and notice that the <em>ideas</em> never change: route, path parameter, auth middleware, service call, serialized response.</p>
+<figure class="anim" id="fig-langs" data-steps>
+  <figcaption class="anim-title">One endpoint in four languages</figcaption>
+  <div class="frame" data-note="<b>Node.js / Express.</b> <code>app.get</code> is the route, <code>:id</code> the path param, <code>authenticate</code> the middleware, <code>res.json</code> the serializer.">
+<pre><span class="k">app</span>.get(<span class="s">"/users/:id"</span>, authenticate, <span class="k">async</span> (req, res) =&gt; {
+  <span class="k">const</span> user = <span class="k">await</span> userService.getById(req.params.id);
+  res.status(<span class="n">200</span>).json(user);
+});</pre></div>
+  <div class="frame" data-note="<b>Go / chi.</b> Same route, same param, middleware via <code>With</code>, and JSON encoding by hand.">
+<pre>r.With(authenticate).Get(<span class="s">"/users/{id}"</span>, <span class="k">func</span>(w http.ResponseWriter, r *http.Request) {
+    user, err := userService.GetByID(r.Context(), chi.URLParam(r, <span class="s">"id"</span>))
+    <span class="k">if</span> err != <span class="k">nil</span> { writeError(w, err); <span class="k">return</span> }
+    json.NewEncoder(w).Encode(user)
+})</pre></div>
+  <div class="frame" data-note="<b>Rust / Axum.</b> Extractors pull out the path param, a layer adds auth, and returning <code>Json</code> serializes.">
+<pre><span class="k">async fn</span> get_user(Path(id): Path&lt;Uuid&gt;, State(svc): State&lt;UserService&gt;)
+    -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {
+    Ok(Json(svc.get_by_id(id).<span class="k">await</span>?))
+}
+<span class="k">let</span> app = Router::new().route(<span class="s">"/users/:id"</span>, get(get_user)).layer(auth_layer);</pre></div>
+  <div class="frame" data-note="<b>Python / FastAPI.</b> Decorator for the route, typed path param, dependency for auth, return value serialized for you.">
+<pre><span class="k">@app</span>.get(<span class="s">"/users/{id}"</span>, dependencies=[Depends(authenticate)])
+<span class="k">async def</span> get_user(id: UUID) -&gt; User:
+    <span class="k">return await</span> user_service.get_by_id(id)</pre></div>
+</figure>
+
+<h2 id="switch">Switching languages in days</h2>
+<p>Say you know Node.js well and want to build a production Rust backend, but there are few end-to-end Rust tutorials. You don't need one. You know what good routing, validation, repositories, auth and error handling look like. So you take <strong>one component at a time</strong>, look up how Rust does it, and apply the pattern you already know.</p>
+<figure class="anim" id="fig-switch">
+  <figcaption class="anim-title">Known pattern + new syntax = production module</figcaption>
+</figure>
+<p>Repeat that loop for every module and, in a few days, you have a production-quality codebase in a language you just learned.</p>
+
+<h2 id="principles">So what is a "principle" here?</h2>
+<p>Not a list of rules. It's a <strong>map of the territory</strong>: the building blocks that every backend, from a weekend project to a huge platform, is organised around. The rest of this course walks that map, one block at a time.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>A musician who understands scales and chords can pick up a new instrument far faster than someone who memorised songs on one instrument. The theory is the part that transfers.</p></aside>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>First principles = the universal components behind every backend, not framework APIs.</li>
+  <li>They let you read unfamiliar codebases by spotting patterns, like senior engineers do.</li>
+  <li>Switching languages becomes "find the syntax for a pattern I already know", one module at a time.</li>
+  <li>Thinking in problems (persistence, caching, streaming) lets you pick the right tool instead of the familiar one.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>You join a team using a framework you've never seen. What do you look for first?</summary><div><p>The universal parts: where routes are defined, where middleware runs, where validation happens, where business logic lives, and how the database is accessed. Then follow one request through them.</p></div></details>
+  <details><summary>Why is "I'm a Node.js developer" a limiting label?</summary><div><p>It ties your skills to one tool. When a module needs very high concurrency or very low latency, you should be able to pick the best tool for it, not the one you're labelled with.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.flow("#fig-switch", {
+  w: 720, h: 230,
+  nodes: {
+    know: { x: 100, y: 115, label: "Pattern you know", sub: "from Node.js", kind: "client", w: 150 },
+    look: { x: 360, y: 115, label: "Look up Rust's way", sub: "", kind: "ext", w: 160 },
+    mod: { x: 615, y: 115, label: "Rust module", sub: "", kind: "cache", w: 150 }
+  },
+  edges: [["know", "look"], ["look", "mod"]],
+  steps: [
+    { path: ["know", "look", "mod"], packet: "validation", set: { look: "validator crate", mod: "validation ✓" }, ok: ["mod"], note: "Validation: you know the pattern (validate at the edge, collect errors). Find a crate and apply it." },
+    { path: ["know", "look", "mod"], packet: "routing", set: { look: "axum", mod: "routing ✓" }, ok: ["mod"], note: "Routing and handlers: same ideas, Axum's spelling." },
+    { path: ["know", "look", "mod"], packet: "data", set: { look: "sqlx", mod: "repository ✓" }, ok: ["mod"], note: "Data access: the repository pattern with a Rust SQL library." },
+    { path: ["know", "look", "mod"], packet: "auth", set: { look: "jsonwebtoken", mod: "auth ✓" }, ok: ["mod"], note: "Authentication: the same token flow with a Rust JWT library." },
+    { path: ["know", "look", "mod"], packet: "errors", tone: "ok", set: { look: "thiserror", mod: "errors ✓" }, ok: ["mod"], note: "Errors and logging. Repeat for every module, and in days you have a production-quality Rust backend." }
+  ]
+});
+</script>
+</body>
+</html>

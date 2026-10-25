@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Object storage, part 1 · Backend Dev</title>
+<meta name="description" content="Why user files don&#x27;t belong on your servers&#x27; disks, how S3 works inside, and uploading safely with presigned URLs.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="24">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 23</span><span>Video · 1:29:29</span></div>
+  <h1>Object storage, part 1</h1>
+  <p class="lead">Users want to upload a profile picture. The obvious approach (save it to the server's disk, store the path in the database) breaks in six different ways in production. This lesson explains why files need a different kind of storage, how <strong>object storage</strong> like S3 works inside, and how to upload files the production way with <strong>presigned URLs</strong>.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Why local disks fail for user files</li><li>Block vs file vs object storage</li><li>Objects, buckets, keys and the folder illusion</li><li>Erasure coding, eleven nines and why durability isn't backup</li><li>Consistency and conditional writes</li><li>Streaming uploads, presigned URLs and the two-phase upload flow</li></ul></div>
+</div>
+<h2 id="naive">The naive approach and how it breaks</h2>
+<p>The intuitive way: the browser sends the file as form data, the server saves it to its local disk and records the path in the database. It works on your laptop. Then production happens.</p>
+<figure class="anim" id="fig-naive">
+  <figcaption class="anim-title">Files on the server's disk, in production</figcaption>
+</figure>
+<p>The root mistake is assuming files are something your app <em>owns</em>. Files are data with a completely different shape from the JSON your server handles 95% of the time: different sizes, access patterns and costs. They need their own storage.</p>
+<div class="cards">
+  <div class="card"><div class="k">1</div><h4>Disks are ephemeral</h4><p>A container's filesystem lives only as long as the container. Every restart and every deploy starts a fresh container from an image that doesn't contain your users' files.</p></div>
+  <div class="card"><div class="k">2</div><h4>Scaling breaks it</h4><p>With N servers behind a load balancer, a file exists on one of them. A request for it hits the right server with probability 1/N. Servers must be stateless (lesson 21.2).</p></div>
+  <div class="card"><div class="k">3</div><h4>Disks have a ceiling</h4><p>You add servers horizontally, but a disk only grows by resizing it, often with downtime, up to a maximum. Meanwhile uploads are your fastest-growing data: 1,000 users × 100 MB is 100 GB a month, forever.</p></div>
+  <div class="card"><div class="k">4</div><h4>One disk, one copy</h4><p>Disks die. With one copy, the files die with it. Real durability needs replication, checksums and repair processes: a whole engineering field.</p></div>
+  <div class="card"><div class="k">5</div><h4>Downloads tie up workers</h4><p>A 50 MB file to a phone on a 2 Mbit/s connection takes ~3.5 minutes, with a worker doing nothing but trickling bytes. Your server becomes an expensive, slow CDN.</p></div>
+  <div class="card"><div class="k">6</div><h4>No transaction</h4><p>Write the file then the row, and a failed insert leaves an orphan file. Write the row then the file, and a failed write leaves a path to nothing. Disk and database can't commit together.</p></div>
+</div>
+<aside class="callout analogy"><div class="tag">Availability vs durability</div><p>A library that's closed for the night has an <strong>availability</strong> problem: wait until morning and you get your book. A library that burned down has a <strong>durability</strong> problem: no amount of waiting brings the book back. The only defence is copies kept somewhere else.</p></aside>
+
+<h2 id="kinds">Three kinds of storage</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th></th><th>Block</th><th>File</th><th>Object</th></tr></thead>
+  <tbody>
+    <tr><td>Interface</td><td>Read/write block #N (512 B–4 KB each)</td><td>Folders, paths, permissions; open, seek, append, overwrite 4 bytes mid-file, atomic rename, locks (POSIX)</td><td>Just four: <code>PUT</code>, <code>GET</code>, <code>DELETE</code> by key, and <code>LIST</code> keys</td></tr>
+    <tr><td>Latency</td><td>Microseconds</td><td>Microseconds (local)</td><td>Milliseconds: every call is an HTTP request</td></tr>
+    <tr><td>Scale</td><td>Attached to one machine</td><td>Coordination (locks, atomic renames) doesn't stretch across networks well; NFS tries</td><td>Practically unlimited</td></tr>
+    <tr><td>Examples</td><td>SSDs, AWS EBS; databases sit on it</td><td>ext4, NTFS, NFS</td><td>S3, Cloudflare R2, Google Cloud Storage, MinIO</td></tr>
+  </tbody>
+</table></div>
+<p>Object storage starts from a different question: <em>what is the smallest interface we can get away with</em>, so it can scale to exabytes? You can't modify an object in place (changing one byte of a 1 GB object means uploading 1 GB again), there's no seek, no append, no rename (copy and delete instead), no locks, and no real folders.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>A coat check. You hand over a coat and get a ticket; later the ticket gets you the coat back. You can't sew a button onto your coat while it's in the cloakroom; you take it out and hand in a new one. Because attendants never coordinate edits, you can add as many attendants and racks as you like.</p></aside>
+<p>What you get in return: with nothing to modify, there's nothing to coordinate; with no folder tree, there's no tree to lock or rebalance; every request is self-contained HTTP, so any of thousands of servers can answer it. Capacity is effectively infinite with nothing to provision, S3 promises <strong>eleven nines</strong> of durability, and browsers, phones and video players can fetch objects directly over HTTP.</p>
+<aside class="callout note"><div class="tag">A pattern worth noticing</div><p>Distributed systems keep making the same trade: <strong>give up mutability, gain scale</strong>. Caches, stateless servers and immutable deployments all follow it. Object storage is its purest example.</p></aside>
+
+<h2 id="objects">Objects, buckets and the folder illusion</h2>
+<div class="cards">
+  <div class="card"><h4>Key</h4><p>A string that is the object's entire identity, e.g. <code>uploads/2026/cat.png</code>.</p></div>
+  <div class="card"><h4>Value</h4><p>The bytes. Any size, any format.</p></div>
+  <div class="card"><h4>Metadata</h4><p>System: size, last-modified, content type, <strong>ETag</strong> (a fingerprint). User: your own key–value pairs, like <code>uploaded-by: 42</code>.</p></div>
+  <div class="card"><h4>Bucket</h4><p>A named container for objects. On AWS, bucket names are globally unique.</p></div>
+</div>
+<p>The folders you click through in the S3 console don't exist. There's one flat list of keys; the slashes are ordinary characters. "Folders" are computed on the fly by grouping keys on a <strong>prefix</strong> and a <strong>delimiter</strong>:</p>
+<figure class="anim" id="fig-folders">
+  <figcaption class="anim-title">Try it: how ListObjects invents folders</figcaption>
+  <div class="widget">
+    <div class="row">
+      <label>Prefix <input type="text" id="fo-prefix" value="uploads/" style="width:170px"></label>
+      <label>Delimiter <select id="fo-delim"><option value="/">/</option><option value="">(none)</option></select></label>
+    </div>
+    <div class="row presets" id="fo-presets"><button type="button" data-p="">(empty)</button><button type="button" data-p="uploads/">uploads/</button><button type="button" data-p="uploads/2026/">uploads/2026/</button><button type="button" data-p="avatars/">avatars/</button></div>
+    <div class="lanes3" id="fo-out"></div>
+  </div>
+</figure>
+<p>That's why "moving a folder" of 40,000 files is slow and costs money (40,000 copies and deletes), and why empty folders can't exist; tools fake them with a zero-byte object whose key ends in <code>/</code>.</p>
+<h3>Designing keys</h3>
+<div class="table-wrap"><table>
+  <thead><tr><th>Rule</th><th>✕ Bad key</th><th>✓ Better key</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Never use the user's filename.</strong> <code>PUT</code> silently overwrites (two users' <code>resume.pdf</code> collide), names can contain <code>../</code> for path traversal, and emoji, null bytes or right-to-left characters break things downstream. Generate the key; store the original name in your database or user metadata.</td><td><code>uploads/resume.pdf</code></td><td><code>…/7f3c9a1e-…pdf</code></td></tr>
+    <tr><td><strong>Put randomness early.</strong> The index is partitioned by key prefix. Keys starting with a timestamp all hit the same partition for an hour, a <strong>hot partition</strong> that answers <code>503 SlowDown</code> under load. AWS partitions much better than it used to, but this costs nothing.</td><td><code>2026-03-14/10/…</code></td><td><code>tenant_9/user_42/7f3c…</code></td></tr>
+    <tr><td><strong>Let the key carry ownership.</strong> With <code>tenant/user/object</code>, an authorization check is a string-prefix comparison, no database trip, and credentials can be scoped to one prefix.</td><td><code>7f3c9a1e-….png</code></td><td><code>tenant_9/user_42/avatars/7f3c….png</code></td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="inside">What happens when you PUT 100 MB</h2>
+<p>The request lands on one of thousands of stateless front-end nodes, which verifies its signature. Then the work splits into two very different systems: the <strong>data plane</strong> (store huge volumes of bytes so they survive; simple operations) and the <strong>metadata plane</strong> (remember which key maps to which bytes; small data but countless operations, and it must be fast and <strong>strongly consistent</strong>).</p>
+<figure class="anim" id="fig-put">
+  <figcaption class="anim-title">Data plane and metadata plane</figcaption>
+</figure>
+<h3>The data plane: erasure coding</h3>
+<p>The simple way to survive dead drives is three copies on three machines in separate failure domains. But storing 1 PB then means buying 3 PB of drives: 200% overhead. Large providers use <strong>erasure coding</strong> instead: split the object into, say, 14 data shards, compute 6 extra <strong>parity</strong> shards with Reed–Solomon math, and scatter all 20 across different drives, racks, power domains and ideally buildings. <strong>Any 14 of the 20</strong> rebuild the whole object.</p>
+<figure class="anim" id="fig-ec">
+  <figcaption class="anim-title">Try it: destroy drives until the object is lost</figcaption>
+  <div class="widget">
+    <div class="row">
+      <button type="button" class="act" id="ec-kill">Fail a random drive</button>
+      <button type="button" class="ghost" id="ec-reset">Reset</button>
+      <span class="small muted">or click shards to fail or repair them</span>
+    </div>
+    <div id="ec-grid" class="ec-grid"></div>
+    <div class="out" id="ec-out"></div>
+    <div class="tiles">
+      <div class="tile"><small>3-way replication</small><b>3.0× storage</b><small>survives 2 failures</small></div>
+      <div class="tile ok"><small>Erasure coding 14 + 6</small><b>1.43× storage</b><small>survives 6 failures</small></div>
+    </div>
+  </div>
+</figure>
+<p>Cheaper <em>and</em> more durable; the price is CPU to compute parity and extra reads during recovery, a good trade since drives cost more than CPU. This math is where S3's <strong>eleven nines</strong> (99.999999999%) comes from: store 10 million objects and statistically expect to lose one every 10,000 years.</p>
+<aside class="callout warn"><div class="tag">Durability is not backup</div><p>Eleven nines protect you from dying drives, not from yourself. Delete the wrong prefix and S3 will durably, reliably delete it. A bug that overwrites objects gets its corrupted versions stored perfectly. For data that matters, turn on <strong>versioning</strong> (overwrites and deletes create new versions) and <strong>replicate to a bucket in a separate cloud account</strong>, so one leaked credential can't destroy both.</p></aside>
+<h3>The metadata plane: a giant sorted index</h3>
+<p>Conceptually it's a distributed, sorted key–value index (think a distributed B-tree) mapping bucket + key to shard locations, size, ETag and content type, partitioned by key range. Some consequences:</p>
+<ul>
+  <li><strong><code>LIST</code> is a range scan</strong> over that distributed index: slow. Never call it in a request path. <strong>Your database is the index</strong> of which files exist; the bucket just holds the bytes.</li>
+  <li><strong>No atomic rename:</strong> the key decides the partition, so renaming means moving the entry.</li>
+  <li><strong>Size and type are instant:</strong> they're read from the index without touching a drive (a cheap <code>HEAD</code> request).</li>
+</ul>
+<p>S3 was once <strong>eventually consistent</strong>: upload an object, read it immediately, and you might get a 404 from an index replica that hadn't caught up. Since December 2020 it's <strong>strongly consistent</strong> (read-after-write). Old advice to add retry loops or sleeps after uploading is outdated.</p>
+<h3>Conditional writes</h3>
+<p>For almost 20 years, two writers to the same key meant one silently won, with no way to tell. Since 2024, S3 supports <strong>conditional writes</strong>:</p>
+<ul>
+  <li><code>If-None-Match: *</code> creates the object only if the key doesn't exist yet; otherwise <code>412 Precondition Failed</code>. No more silent overwrites.</li>
+  <li><code>If-Match: &lt;ETag&gt;</code> replaces the object only if it's still the version you read: <strong>compare-and-swap</strong>.</li>
+</ul>
+<figure class="anim" id="fig-cas">
+  <figcaption class="anim-title">Compare-and-swap with ETags</figcaption>
+</figure>
+<p>With strong consistency plus "exactly one writer wins", object storage can coordinate: people now build leader election and even database write-ahead logs on S3. Not every "S3-compatible" provider (meaning it speaks the S3 API, like R2 with the AWS SDK) supports conditional writes; check the docs before relying on them.</p>
+
+<h2 id="through-server">Uploading through your server</h2>
+<p>The obvious architecture: the browser posts the file to your API, which forwards it to the bucket. Your server sees every byte, so it can validate, scan and hash the content, and authorization is your normal middleware. For small files (avatars, CSVs, documents of a few MB) it's acceptable.</p>
+<p>The hidden problem is <strong>buffering</strong>. Go's <code>ParseMultipartForm</code> or a default Node body parser reads the whole file into memory: 20 concurrent 100 MB uploads is 2 GB of RAM, and the container is killed for running out of memory. You won't see it locally, with small test files, a fast network and 16 GB of RAM.</p>
+<figure class="anim" id="fig-stream">
+  <figcaption class="anim-title">Server memory while receiving a 500 MB upload</figcaption>
+  <div class="widget" id="stream-chart"></div>
+</figure>
+<div class="split">
+<pre><span class="c">// Go: stream the multipart body straight to S3</span>
+r.Body = http.MaxBytesReader(w, r.Body, <span class="n">10</span>&lt;&lt;<span class="n">20</span>) <span class="c">// hard cap first</span>
+mr, _ := r.MultipartReader()
+part, _ := mr.NextPart()                   <span class="c">// an io.Reader, not []byte</span>
+_, err := uploader.Upload(ctx, &amp;s3.PutObjectInput{
+    Bucket: aws.String(bucket),
+    Key:    aws.String(key),
+    Body:   part,                          <span class="c">// chunks flow through</span>
+})</pre>
+<div class="card"><h4>Even streamed, the pipe has limits</h4><p>Now bandwidth is the bottleneck. Load balancers drop connections idle for ~60 s, reverse proxies like Nginx reject big bodies with <code>413 Request Entity Too Large</code>, and API gateways and serverless functions cap payloads at a few MB, often with no way to raise it.</p></div>
+</div>
+
+<h2 id="presigned">Presigned URLs: let the browser talk to the bucket</h2>
+<p>The production answer: the bytes go <strong>straight from the browser to the bucket</strong> and never touch your server. But the bucket must stay private, and you can't hand the browser your storage credentials. You need to grant permission for <em>exactly one operation, on exactly one key, for the next few minutes</em>.</p>
+<p>A <strong>presigned URL</strong> does exactly that. It's a normal URL whose query string holds the algorithm, your access key ID, a timestamp, an expiry and a <strong>signature</strong>: an HMAC of the method, bucket, key and expiry, computed with your secret key. The secret never leaves your server, and signing needs no network call.</p>
+<figure class="anim" id="fig-presign">
+  <figcaption class="anim-title">The presigned upload flow</figcaption>
+</figure>
+<figure class="anim" id="fig-sign">
+  <figcaption class="anim-title">Try it: be the bucket that verifies the signature</figcaption>
+  <div class="widget">
+    <div class="row">
+      <button type="button" class="act" id="ps-get">1. Ask the API for an upload URL</button>
+      <button type="button" class="ghost" id="ps-put">2. PUT the file with this URL</button>
+    </div>
+    <textarea id="ps-url" spellcheck="false" style="min-height:96px" placeholder="The presigned URL appears here. You can edit it."></textarea>
+    <div class="row" style="margin-top:10px">
+      <button type="button" class="ghost" id="ps-tamper">Change the key to another user's</button>
+      <button type="button" class="ghost" id="ps-clock">Advance the clock 6 minutes</button>
+      <span class="small muted" id="ps-now"></span>
+    </div>
+    <div class="out" id="ps-out"></div>
+    <p class="small muted" style="margin:6px 0 0">Simplified for clarity: real AWS Signature V4 signs a canonical request with a derived key, but the idea is identical. The signature is computed live with Web Crypto.</p>
+  </div>
+</figure>
+<h3>The size loophole and presigned POST policies</h3>
+<p>A presigned <code>PUT</code> covers the method, bucket and key, but not the body size. Nothing stops a user from sending a 5 GB file to a URL meant for a profile picture. Instead, sign a <strong>presigned POST</strong> with a <strong>policy</strong>: a small JSON document of conditions that the storage service itself enforces.</p>
+<div class="split">
+<pre>{
+  <span class="s">"expiration"</span>: <span class="s">"2026-03-14T10:05:00Z"</span>,
+  <span class="s">"conditions"</span>: [
+    [<span class="s">"content-length-range"</span>, <span class="n">1024</span>, <span class="n">5242880</span>],
+    [<span class="s">"starts-with"</span>, <span class="s">"$Content-Type"</span>, <span class="s">"image/"</span>],
+    [<span class="s">"starts-with"</span>, <span class="s">"$key"</span>, <span class="s">"tenant_9/user_42/"</span>]
+  ]
+}</pre>
+<div class="table-wrap"><table>
+  <thead><tr><th>Upload attempt</th><th>Bucket says</th></tr></thead>
+  <tbody>
+    <tr><td>415 KB JPEG into own prefix</td><td><span class="chip ok">stored</span></td></tr>
+    <tr><td>300 MB video</td><td><span class="chip bad">400 EntityTooLarge</span></td></tr>
+    <tr><td>Image into another user's prefix</td><td><span class="chip bad">403 policy condition failed</span></td></tr>
+  </tbody>
+</table></div>
+</div>
+<p class="small muted">On the client, append the file field <em>last</em> in the <code>FormData</code>, and don't set <code>Content-Type</code> on the fetch yourself; the browser must add the multipart boundary.</p>
+
+<h2 id="two-phase">Telling your backend about the upload</h2>
+<p>If the bytes never pass through your server, how does your database learn the file exists? With a <strong>two-phase flow</strong>: record the <em>intent</em> before any bytes move, then confirm.</p>
+<figure class="anim" id="fig-twophase">
+  <figcaption class="anim-title">Pending → uploaded → ready</figcaption>
+</figure>
+<p>Some uploads will be abandoned: closed tabs, dropped mobile connections, a completion call that never arrives. A bucket <strong>lifecycle rule</strong> (or a background job, lesson 14) deletes objects from uploads that never completed after ~24 hours, and a job marks stale <code>pending</code> rows <code>expired</code>. The database is the source of truth for <em>which</em> files exist and the bucket for their <em>bytes</em>; this cleanup keeps the two from drifting apart. That's the answer to problem 6: not a transaction, but a state machine plus reconciliation.</p>
+<aside class="callout note"><div class="tag">CORS</div><p>A browser uploading to <code>my-bucket.s3.amazonaws.com</code> makes a cross-origin request (lesson 5). The bucket needs a CORS configuration allowing your front end's origin, the <code>PUT</code>/<code>POST</code> methods, and exposing the <code>ETag</code> header (needed for multipart uploads in part 2). If uploads work in curl or Postman but fail in the browser, check CORS first.</p></aside>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>Never keep user files on your servers' disks: they're ephemeral, unshared, capped, single-copy, slow to serve and can't commit with your database.</li>
+  <li>Object storage offers a tiny interface (PUT, GET, DELETE, LIST by key) and immutable objects, in exchange for unlimited scale and extreme durability.</li>
+  <li>Folders are an illusion: prefixes plus a delimiter. Generate keys yourself, put randomness early, encode ownership.</li>
+  <li>Erasure coding gives more durability than 3 copies at half the storage. Durability isn't backup: use versioning and cross-account replication.</li>
+  <li>Your database is the index; never LIST in the request path. S3 is strongly consistent and supports conditional writes (<code>If-None-Match</code>, <code>If-Match</code>).</li>
+  <li>If you must proxy uploads, stream them with a size cap. Better: presigned URLs, ideally presigned POST policies that enforce size, type and key prefix.</li>
+  <li>Use a two-phase upload (pending → HEAD check → ready) plus lifecycle cleanup to keep the database and bucket in sync.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>After a deploy, all profile pictures return 404. What happened?</summary><div><p>They were saved to the container's local filesystem, which is ephemeral: the deploy replaced the container with a fresh one from the image, which never contained user files.</p></div></details>
+  <details><summary>Two users upload <code>invoice.pdf</code> and one of them later sees the other's invoice. Why, and what's the fix?</summary><div><p>The user's filename was used as the key, and <code>PUT</code> silently overwrote the first object. Generate unique keys (e.g. <code>tenant/user/uuid</code>) and store the original name separately. Conditional writes (<code>If-None-Match: *</code>) would also have refused the overwrite.</p></div></details>
+  <details><summary>Your "files" page calls ListObjects for the user's prefix on every request and is getting slow. What should it do instead?</summary><div><p>Query your database, which should record every file (key, owner, size, status). LIST is a range scan over a distributed index and doesn't belong in the request path.</p></div></details>
+  <details><summary>A presigned PUT URL for avatars was used to upload a 4 GB file. How do you prevent that?</summary><div><p>Use a presigned POST with a policy containing <code>content-length-range</code> (plus content-type and key-prefix conditions). The storage service rejects anything outside the limits before storing it.</p></div></details>
+  <details><summary>S3 has eleven nines of durability. Do you still need backups?</summary><div><p>Yes. Durability protects against hardware failure, not against deletes, overwrites or compromised credentials. Enable versioning and replicate to a bucket in another account.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.flow("#fig-naive", {
+  w: 720, h: 290,
+  nodes: {
+    u: { x: 75, y: 145, label: "User", sub: "", kind: "client", w: 110 },
+    lb: { x: 235, y: 145, label: "Load balancer", sub: "", kind: "net", w: 130 },
+    s1: { x: 440, y: 50, label: "Server 1", sub: "disk", kind: "server", w: 170 },
+    s2: { x: 440, y: 145, label: "Server 2", sub: "disk", kind: "server", w: 170 },
+    s3: { x: 440, y: 240, label: "Server 3", sub: "disk", kind: "server", w: 170 },
+    db: { x: 645, y: 145, label: "Database", sub: "", kind: "db", shape: "cyl", w: 130, h: 64 }
+  },
+  edges: [["u", "lb"], ["lb", "s1"], ["lb", "s2"], ["lb", "s3"], ["s1", "db"], ["s2", "db"], ["s3", "db"]],
+  steps: [
+    { path: ["u", "lb", "s1", "db"], packet: "avatar.png", set: { s1: "disk: avatar.png", db: "path: /data/avatar.png" }, note: "The upload lands on server 1, which saves it to its own disk and records the path in the database." },
+    { path: ["u", "lb", "s3"], bad: ["s3"], packet: "GET", set: { s1: "disk: avatar.png", db: "path: /data/avatar.png", s3: "404: no such file" }, note: "The next request for the picture is routed to server 3, which has never seen it: <b>404</b>. Odds of hitting the right server: 1 in 3." },
+    { path: ["u", "lb", "s1"], bad: ["s1"], packet: "4 GB video", set: { s1: "out of memory ✕", db: "path: /data/avatar.png" }, note: "A user uploads a 4 GB video. The framework reads the whole body into the 4 GB instance's memory, and the container is killed." },
+    { warn: ["s1"], bad: ["db"], fresh: true, set: { s1: "restarted · disk empty", db: "paths to nothing" }, note: "It restarts from the image with a fresh, <b>ephemeral</b> filesystem. Every file it held is gone, and the database still points at them." }
+  ]
+});
+
+(function () {
+  var KEYS = ["avatars/u_42.png", "avatars/u_7.png", "invoices/2026/03/inv_1.pdf", "uploads/2025/old.jpg", "uploads/2026/cat.png", "uploads/2026/dog.png", "uploads/2026/raw/cat.heic", "uploads/readme.txt"];
+  var p = document.getElementById("fo-prefix"), d = document.getElementById("fo-delim"), out = document.getElementById("fo-out");
+  function esc(s) { return s.replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); }
+  function render() {
+    var prefix = p.value, delim = d.value, contents = [], common = [];
+    KEYS.forEach(function (k) {
+      if (k.indexOf(prefix) !== 0) return;
+      var rest = k.slice(prefix.length), i = delim ? rest.indexOf(delim) : -1;
+      if (i >= 0) { var cp = prefix + rest.slice(0, i + 1); if (common.indexOf(cp) < 0) common.push(cp); }
+      else contents.push(k);
+    });
+    function col(title, items, icon) { return "<div><h5>" + title + "</h5><pre style=\"white-space:pre;overflow-x:auto\">" + (items.length ? items.map(function (x) { return icon + esc(x); }).join("\n") : '<span class="c">(none)</span>') + "</pre></div>"; }
+    out.innerHTML = col("Every key (● = matches prefix)", KEYS.map(function (k) { return (k.indexOf(prefix) === 0 ? "● " : "  ") + k; }), "") +
+      col("CommonPrefixes (shown as folders)", common, "📁 ") + col("Contents (actual objects)", contents, "📄 ");
+  }
+  p.addEventListener("input", render); d.addEventListener("change", render);
+  Array.prototype.forEach.call(document.querySelectorAll("#fo-presets button"), function (b) { b.addEventListener("click", function () { p.value = b.getAttribute("data-p"); render(); }); });
+  render();
+})();
+
+BD.flow("#fig-put", {
+  w: 720, h: 290,
+  nodes: {
+    c: { x: 80, y: 145, label: "Client", sub: "", kind: "client", w: 110 },
+    fe: { x: 290, y: 145, label: "Front-end node", sub: "1 of thousands · stateless", kind: "net", w: 190 },
+    meta: { x: 570, y: 55, label: "Metadata plane", sub: "sorted index", kind: "cache", w: 190 },
+    data: { x: 570, y: 235, label: "Data plane", sub: "shards on drives", kind: "db", shape: "cyl", w: 190, h: 70 }
+  },
+  edges: [["c", "fe"], ["fe", "meta"], ["fe", "data"]],
+  steps: [
+    { path: ["c", "fe"], packet: "PUT 100 MB", set: { fe: "signature ✓" }, note: "A <code>PUT</code> arrives at any front-end node, which recomputes and checks the request's signature." },
+    { path: ["fe", "data"], hl: ["data"], packet: "20 shards", set: { fe: "signature ✓", data: "shards on 20 drives" }, note: "The <b>data plane</b> splits the bytes into shards and spreads them across many drives so they survive failures." },
+    { path: ["fe", "meta"], hl: ["meta"], packet: "key → shards", set: { fe: "signature ✓", data: "shards on 20 drives", meta: "cat.png → shards, ETag, size" }, note: "The <b>metadata plane</b> records that this bucket + key maps to those shards, plus size, ETag and content type. This globally distributed, strongly consistent index is the hard engineering problem." },
+    { path: [["c", "fe", "meta"], ["fe", "data"]], tone: "ok", ok: ["meta", "data"], fresh: true, packet: "GET", set: { meta: "lookup: few ms", data: "read 14 of 20" }, note: "A later <code>GET</code> looks the key up in the index, then reads enough shards to rebuild the object." }
+  ]
+});
+
+(function () {
+  var grid = document.getElementById("ec-grid"), out = document.getElementById("ec-out"), dead = {};
+  function render() {
+    var html = "", alive = 0;
+    for (var i = 0; i < 20; i++) {
+      var isP = i >= 14, lbl = isP ? "P" + (i - 13) : "D" + (i + 1);
+      if (!dead[i]) alive++;
+      html += '<button type="button" data-i="' + i + '" class="ec ' + (isP ? "p " : "") + (dead[i] ? "dead" : "") + '" aria-label="shard ' + lbl + (dead[i] ? " failed" : "") + '">' + (dead[i] ? "✕" : lbl) + "</button>";
+    }
+    grid.innerHTML = html;
+    var failed = 20 - alive;
+    out.innerHTML = alive >= 14
+      ? '<span class="verdict ok">✓ ' + failed + " failed · " + alive + " of 20 shards left: any 14 rebuild the object</span>"
+      : '<span class="verdict bad">✕ ' + failed + " failed · only " + alive + " shards left: the object is lost</span>";
+    Array.prototype.forEach.call(grid.querySelectorAll("button"), function (b) { b.addEventListener("click", function () { var i = +b.getAttribute("data-i"); dead[i] = !dead[i]; render(); }); });
+  }
+  document.getElementById("ec-kill").addEventListener("click", function () {
+    var live = []; for (var i = 0; i < 20; i++) if (!dead[i]) live.push(i);
+    if (live.length) dead[live[Math.floor(Math.random() * live.length)]] = true;
+    render();
+  });
+  document.getElementById("ec-reset").addEventListener("click", function () { dead = {}; render(); });
+  render();
+})();
+
+BD.seq("#fig-cas", {
+  actors: ["Client A", "S3", "Client B"],
+  colW: 200, rowH: 40, pad: 80,
+  steps: [
+    { from: 0, to: 1, label: "GET config.json", note: "Client A reads the object…" },
+    { from: 1, to: 0, label: "ETag: \"v1\"", ret: true, note: "…and remembers its ETag, a fingerprint of this version." },
+    { from: 2, to: 1, label: "GET → ETag \"v1\"", note: "Client B reads the same version." },
+    { from: 2, to: 1, label: "PUT If-Match: \"v1\"", note: "B finishes its change first and writes, on condition that the object is still v1." },
+    { from: 1, to: 2, label: "200 · new ETag \"v2\"", ret: true, tone: "ok", note: "It is, so the write succeeds and the ETag becomes v2." },
+    { from: 0, to: 1, label: "PUT If-Match: \"v1\"", note: "A now writes its change, based on the old v1." },
+    { from: 1, to: 0, label: "412 Precondition Failed", ret: true, tone: "bad", note: "The object is no longer v1, so S3 refuses. Without the condition, A would have silently erased B's change. A re-reads and retries." }
+  ]
+});
+
+(function () {
+  var host = document.getElementById("stream-chart");
+  var W = 640, H = 230, L = 60, R = 150, T = 14, B = 30, maxX = 6.5, maxY = 600;
+  var sx = function (s) { return L + s / maxX * (W - L - R); }, sy = function (mb) { return T + (1 - mb / maxY) * (H - T - B); };
+  var g = "";
+  [0, 200, 400, 600].forEach(function (y) { g += '<line class="chart-grid" x1="' + L + '" x2="' + (W - R) + '" y1="' + sy(y) + '" y2="' + sy(y) + '"/><text class="chart-axis" x="' + (L - 8) + '" y="' + (sy(y) + 4) + '" text-anchor="end">+' + y + " MB</text>"; });
+  [0, 2, 4, 6].forEach(function (x) { g += '<text class="chart-axis" x="' + sx(x) + '" y="' + (H - 10) + '" text-anchor="middle">' + x + " s</text>"; });
+  var buf = "", str = "";
+  for (var s = 0; s <= maxX + 1e-9; s += 0.25) {
+    buf += (s ? "L" : "M") + sx(s).toFixed(1) + "," + sy(Math.min(500, s / maxX * 500)).toFixed(1);
+    str += (s ? "L" : "M") + sx(s).toFixed(1) + "," + sy(2 + Math.sin(s * 5)).toFixed(1);
+  }
+  host.innerHTML = '<svg viewBox="0 0 ' + W + " " + H + '" class="fit" role="img" aria-label="Buffered upload memory climbs to 500 MB; streamed upload memory stays flat">' + g +
+    '<path d="' + buf + '" fill="none" stroke="var(--bad)" stroke-width="2"/><path d="' + str + '" fill="none" stroke="var(--ok)" stroke-width="2"/>' +
+    '<circle cx="' + sx(maxX) + '" cy="' + sy(500) + '" r="4" fill="var(--bad)"/><circle cx="' + sx(maxX) + '" cy="' + sy(2) + '" r="4" fill="var(--ok)"/>' +
+    '<text class="svg-text" x="' + (sx(maxX) + 10) + '" y="' + (sy(500) + 4) + '" font-size="12">buffered: +500 MB</text>' +
+    '<text class="svg-text" x="' + (sx(maxX) + 10) + '" y="' + (sy(2) - 4) + '" font-size="12">streamed: one chunk</text></svg>' +
+    '<div class="legend" style="padding:6px 0 0"><span><i style="background:var(--bad);height:3px"></i>buffered (whole body in RAM)</span><span><i style="background:var(--ok);height:3px"></i>streamed (chunk by chunk)</span></div>' +
+    '<p class="small muted" style="margin:6px 0 0">Both uploads take the same ~6.5 s; only memory differs. Twenty buffered uploads at once would need ~10 GB.</p>';
+})();
+
+BD.seq("#fig-presign", {
+  actors: ["Browser", "Your API", "S3 bucket"],
+  colW: 200, rowH: 40, pad: 80,
+  steps: [
+    { from: 0, to: 1, label: "POST /uploads {type: image/png}", note: "The browser asks your API for permission to upload, with its normal session or token." },
+    { from: 1, to: 1, label: "authorize · pick key · sign (HMAC)", note: "Your API checks the user may upload, generates the key, and signs a URL with its secret. Pure computation, no call to S3." },
+    { from: 1, to: 0, label: "presigned URL (expires in 5 min)", ret: true, tone: "ok", note: "It returns the URL. The secret key never leaves your server." },
+    { from: 0, to: 2, label: "PUT bytes → presigned URL", note: "The browser uploads <b>directly to the bucket</b>. Your server never touches the bytes." },
+    { from: 2, to: 2, label: "rebuild string · recompute HMAC · compare", note: "S3 rebuilds the signed string from the request, recomputes the HMAC with its copy of the secret, and checks the expiry." },
+    { from: 2, to: 0, label: "200 OK", ret: true, tone: "ok", note: "Match and not expired: stored. Change one character or arrive late and it's <b>403</b>." }
+  ]
+});
+
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", BUCKET = "my-bucket", EXPIRES = 300;
+  var now = Date.UTC(2026, 2, 14, 10, 0, 0), enc = new TextEncoder();
+  var ok = !!(window.crypto && crypto.subtle);
+  function stamp(t) { return new Date(t).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, ""); }
+  function parseStamp(s) { var m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(s || ""); return m ? Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : NaN; }
+  function hmac(msg) {
+    return crypto.subtle.importKey("raw", enc.encode(SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"])
+      .then(function (k) { return crypto.subtle.sign("HMAC", k, enc.encode(msg)); })
+      .then(function (b) { return Array.prototype.map.call(new Uint8Array(b), function (x) { return ("0" + x.toString(16)).slice(-2); }).join(""); });
+  }
+  function toSign(method, key, date, exp) { return method + "\n/" + BUCKET + "/" + key + "\n" + date + "\n" + exp; }
+  function showNow() { $("ps-now").textContent = "Bucket's clock: " + new Date(now).toISOString().slice(11, 19) + " UTC"; }
+  function say(cls, html) { $("ps-out").innerHTML = '<span class="verdict ' + cls + '">' + html + "</span>"; }
+  if (!ok) { $("ps-out").textContent = "Your browser blocks the Web Crypto API here (it needs HTTPS)."; return; }
+  $("ps-get").addEventListener("click", function () {
+    var key = "tenant_9/user_42/avatars/" + (crypto.randomUUID ? crypto.randomUUID().slice(0, 8) : "7f3c9a1e") + ".png", date = stamp(now);
+    hmac(toSign("PUT", key, date, EXPIRES)).then(function (sig) {
+      $("ps-url").value = "https://" + BUCKET + ".s3.amazonaws.com/" + key + "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20260314%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=" + date + "&X-Amz-Expires=" + EXPIRES + "&X-Amz-SignedHeaders=host&X-Amz-Signature=" + sig;
+      $("ps-out").innerHTML = "Signed for <code>PUT</code> on <code>" + key + "</code>, valid " + EXPIRES / 60 + " minutes. No credentials in the URL, just a signature.";
+    });
+  });
+  $("ps-put").addEventListener("click", function () {
+    var u;
+    try { u = new URL($("ps-url").value.trim()); } catch (e) { say("bad", "Get a URL first (step 1)."); return; }
+    var key = decodeURIComponent(u.pathname.slice(1)), q = u.searchParams, date = q.get("X-Amz-Date"), exp = q.get("X-Amz-Expires"), sig = q.get("X-Amz-Signature") || "";
+    hmac(toSign("PUT", key, date, exp)).then(function (expect) {
+      if (expect !== sig) { say("bad", "403 SignatureDoesNotMatch: the bucket rebuilt the string from this request and got a different HMAC (" + expect.slice(0, 12) + "… ≠ " + sig.slice(0, 12) + "…)"); return; }
+      if (now > parseStamp(date) + (+exp) * 1000) { say("bad", "403 AccessDenied: Request has expired. The signature is valid, but its time is up."); return; }
+      say("ok", "200 OK: signature matches and hasn't expired. Stored at " + key);
+    });
+  });
+  $("ps-tamper").addEventListener("click", function () { $("ps-url").value = $("ps-url").value.replace("user_42", "user_43"); $("ps-out").textContent = "Changed user_42 → user_43 in the path. Now try the PUT."; });
+  $("ps-clock").addEventListener("click", function () { now += 6 * 60 * 1000; showNow(); });
+  showNow();
+})();
+
+BD.seq("#fig-twophase", {
+  actors: ["Browser", "Your API", "Database", "S3"],
+  colW: 160, rowH: 40, pad: 70,
+  steps: [
+    { from: 0, to: 1, label: "POST /uploads", note: "Phase 1: the browser announces its intent to upload." },
+    { from: 1, to: 2, label: "INSERT status='pending', key", note: "The API authorizes, generates the key and records a <b>pending</b> row before any bytes move." },
+    { from: 1, to: 0, label: "upload id + presigned POST", ret: true, note: "It returns an upload ID and a presigned POST with its policy." },
+    { from: 0, to: 3, label: "POST file (policy-checked)", note: "The browser uploads straight to the bucket." },
+    { from: 0, to: 1, label: "POST /uploads/:id/complete", note: "Phase 2: the browser reports completion with the upload ID (not the key)." },
+    { from: 1, to: 3, label: "HEAD object", note: "The API doesn't trust the client: a cheap <code>HEAD</code> request checks the object exists with the expected size and type." },
+    { from: 3, to: 1, label: "200 · 415 KB · image/jpeg", ret: true, tone: "ok", note: "Metadata comes straight from the index; no bytes are transferred." },
+    { from: 1, to: 2, label: "UPDATE status='ready'", tone: "ok", note: "Only now is the file marked <b>ready</b> and shown to users." }
+  ]
+});
+</script>
+</body>
+</html>

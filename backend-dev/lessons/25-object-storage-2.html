@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Object storage, part 2 · Backend Dev</title>
+<meta name="description" content="Multipart and resumable uploads, CDNs and presigned downloads, range requests, video streaming and costs.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="25">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 24</span><span>Video · 49:37</span></div>
+  <h1>Object storage, part 2</h1>
+  <p class="lead">Part 1 handled files of a few hundred megabytes. Now the big ones: why a single upload request fails for large files, how <strong>multipart uploads</strong> make them parallel and resumable, and then the other half of the story, <strong>downloads</strong>: CDNs, presigned GETs, <strong>range requests</strong>, video streaming and what it all costs.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Four reasons a single PUT fails for big files</li><li>The multipart protocol and choosing part sizes</li><li>ETag and abandoned-upload gotchas</li><li>The full browser → API → bucket architecture with resume</li><li>Download patterns, CDN caching and presigned GETs</li><li>Range requests, adaptive streaming and storage pricing</li></ul></div>
+</div>
+<h2 id="why-multipart">Why one big PUT stops working</h2>
+<div class="cards">
+  <div class="card"><div class="k">1</div><h4>A hard limit</h4><p>A single PUT to S3 can't exceed <strong>5 GB</strong>. Accept videos, drone footage, CAD files or database dumps and you're architecturally forced to do something else.</p></div>
+  <div class="card"><div class="k">2</div><h4>All or nothing</h4><p>At 4.8 GB of 5 GB, the Wi-Fi blinks and the upload is gone. No resume; start from zero. On mobile, that transfer takes 20–30 minutes, and mobile networks glitch constantly.</p></div>
+  <div class="card"><div class="k">3</div><h4>One TCP stream is slow</h4><p>A single connection's throughput is bounded by window size ÷ round-trip time, and one lost packet collapses its window. On a 200 Mbit/s link, one stream may manage 30. Parallel streams each get their own window; that's all download managers do.</p></div>
+  <div class="card"><div class="k">4</div><h4>Poor experience</h4><p>Coarse progress, no pause, and nothing survives a closed tab.</p></div>
+</div>
+
+<h2 id="multipart">The multipart upload protocol</h2>
+<p>Three calls (plus one for giving up):</p>
+<figure class="anim" id="fig-mpu">
+  <figcaption class="anim-title">Create → upload parts → complete</figcaption>
+</figure>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>Like <code>git add</code> before <code>git commit</code>: parts pile up in a staging area, invisible to everyone (a GET on the key is still 404), until one commit makes them a single object. And because the commit just records "this object = these parts in this order" in the metadata plane, completing a 50 GB upload takes as long as completing a 50 MB one.</p></aside>
+<h3>Choosing the part size</h3>
+<p>There's a hard cap of <strong>10,000 parts</strong> (each at least 5 MB, except the last). With a fixed 5 MB part size, the biggest possible file is 50 GB; a 60 GB upload fails at part 10,001, <em>after</em> 50 GB has been transferred. So compute it: <code>partSize = max(floor, fileSize ÷ 10,000)</code>. Why not just use huge parts? A part is your <strong>retry unit</strong>: a failed 500 MB part on mobile means resending 500 MB. A floor of 16–64 MB is the sweet spot.</p>
+<figure class="anim" id="fig-parts">
+  <figcaption class="anim-title">Try it: part-size calculator</figcaption>
+  <div class="widget">
+    <div class="row">
+      <label>File size <select id="pt-size"><option value="100">100 MB</option><option value="2048" selected>2 GB</option><option value="51200">50 GB</option><option value="61440">60 GB</option><option value="512000">500 GB</option><option value="5242880">5 TB (S3 maximum)</option></select></label>
+      <label>Floor <select id="pt-floor"><option value="5">5 MB</option><option value="16" selected>16 MB</option><option value="32">32 MB</option><option value="64">64 MB</option></select></label>
+    </div>
+    <div class="tiles" id="pt-tiles"></div>
+    <div class="out" id="pt-out"></div>
+  </div>
+</figure>
+<div class="split">
+  <div class="card"><h4>Gotcha: multipart ETags aren't MD5s</h4><p>For a single PUT, the ETag is the MD5 of the content, so people compare it with a local hash. For multipart uploads it's an MD5 of the parts' MD5s plus <code>-N</code> (e.g. <code>"9b2c…-42"</code>), so that check breaks. Use the SDK's <strong>checksums</strong> (CRC32C or SHA-256 per part, plus a full-object checksum the service verifies), or compute your own SHA-256 in the browser, store it as metadata and verify it in a background job. Bonus: free deduplication.</p></div>
+  <div class="card"><h4>Gotcha: abandoned uploads cost money, invisibly</h4><p>300 parts uploaded, tab closed, Complete never called: ~10 GB sits in the staging area, <strong>billed every month</strong>, yet absent from the console and from listings (no object exists). Only "list multipart uploads" reveals them. Add this lifecycle rule to <strong>every bucket on day one</strong>:</p>
+<pre>{ <span class="s">"Rules"</span>: [{ <span class="s">"ID"</span>: <span class="s">"abort-stale-mpu"</span>, <span class="s">"Status"</span>: <span class="s">"Enabled"</span>,
+  <span class="s">"Filter"</span>: {},
+  <span class="s">"AbortIncompleteMultipartUpload"</span>: { <span class="s">"DaysAfterInitiation"</span>: <span class="n">7</span> } }] }</pre></div>
+</div>
+
+<h2 id="architecture">Multipart + presigned URLs: the full architecture</h2>
+<figure class="anim" id="fig-arch">
+  <figcaption class="anim-title">Browser, API and bucket working together</figcaption>
+</figure>
+<ul>
+  <li><strong>Presign in batches</strong> (say 100 at a time) as the browser works through them. Signing 10,000 URLs up front makes the init response megabytes of JSON.</li>
+  <li><strong>4–6 parallel PUTs</strong> is the sweet spot; more just fights over the same bandwidth.</li>
+  <li><strong><code>file.slice()</code></strong> returns a lazy <code>Blob</code>, read only when sent, so browser memory is part size × concurrency, not the file size.</li>
+  <li>The bucket's CORS config must <strong>expose the <code>ETag</code> header</strong>, or JavaScript can't read it and can't complete the upload.</li>
+  <li><strong>Resume comes free:</strong> after a refresh, the API finds the pending row, calls <code>ListParts</code> to see which parts the bucket already has, and presigns only the missing ones.</li>
+</ul>
+<figure class="anim" id="fig-up">
+  <figcaption class="anim-title">Try it: upload a 2 GB (2,000 MB) file in 125 parts of 16 MB</figcaption>
+  <div class="widget">
+    <div class="row">
+      <button type="button" class="act" id="up-run">▶ Start upload</button>
+      <button type="button" class="ghost" id="up-refresh">Refresh the page mid-upload</button>
+      <button type="button" class="ghost" id="up-reset">Reset</button>
+      <label>Parallel PUTs <input type="range" id="up-conc" min="1" max="8" value="5"> <b id="up-conc-v">5</b></label>
+    </div>
+    <div class="meter" style="margin-bottom:6px"><i id="up-bar" style="transition:width .1s"></i></div>
+    <div class="out" id="up-stat"></div>
+    <div class="up-grid" id="up-grid"></div>
+    <div class="legend" style="padding:6px 0 0"><span><i style="background:var(--surface-2);border:1px solid var(--border)"></i>waiting</span><span><i style="background:var(--accent)"></i>uploading</span><span><i style="background:var(--ok)"></i>in the bucket (ETag kept)</span><span><i style="background:var(--bad)"></i>failed, retrying just this part</span></div>
+    <p class="small muted" style="margin:6px 0 0">Simulated: a 200 Mbit/s link where each TCP stream tops out at 30 Mbit/s, plus the occasional network glitch. Time is sped up ~20×.</p>
+  </div>
+</figure>
+
+<h2 id="downloads">Downloads: keep your server out of the way</h2>
+<p>Files are downloaded far more often than uploaded, so this is where most of the data (and money) goes. Rule one, again: <strong>don't proxy downloads through your backend</strong>. Each one ties up a worker for its whole duration, you pay for the bandwidth twice, and your one or two regions are slower than a CDN's hundreds of edge locations.</p>
+<div class="cards">
+  <div class="card"><div class="k">1</div><h4>Public assets</h4><p>Product images, CSS, JS bundles: keep the bucket private, put a CDN in front that alone may read it, set a long <code>Cache-Control</code>, and use <strong>content-addressed keys</strong> (the key includes a hash of the content, like <code>app.3f9a1c.js</code>). New content means a new URL, so caches never serve stale files. Cheapest and fastest.</p></div>
+  <div class="card"><div class="k">2</div><h4>Presigned GET</h4><p>Private files: your API checks the user may see the file, then returns a GET URL valid for 5–15 minutes. Same mechanics as presigned uploads.</p></div>
+  <div class="card"><div class="k">3</div><h4>CDN signed URLs or cookies</h4><p>Authorization moves to the CDN's edge, which also keeps full control of caching. Ideal for video, where one viewing session fetches hundreds of segments you'd otherwise have to sign one by one.</p></div>
+</div>
+<figure class="anim" id="fig-cdn">
+  <figcaption class="anim-title">Why presigned GETs defeat your CDN</figcaption>
+</figure>
+
+<h2 id="ranges">Range requests</h2>
+<p>A client can ask for <em>part</em> of a file: <code>Range: bytes=1000000-2999999</code>. The server answers <code>206 Partial Content</code> with a <code>Content-Range</code> header saying which bytes these are and how big the whole file is; a nonsensical range gets <code>416 Range Not Satisfiable</code>. This is plain HTTP, and since object storage speaks HTTP, every bucket supports it. That unlocks:</p>
+<ul>
+  <li><strong>Video seeking:</strong> drag to minute 30 and the player computes the byte offset and fetches from there, skipping everything before.</li>
+  <li><strong>Resumable downloads:</strong> the connection drops at byte 400,000,000; re-request from exactly that byte.</li>
+  <li><strong>Parallel downloads:</strong> six connections, six ranges, one file.</li>
+  <li><strong>Peeking:</strong> read the first 8 bytes to learn a file's real type without downloading it.</li>
+</ul>
+<figure class="anim" id="fig-range">
+  <figcaption class="anim-title">Try it: seek in a 1.2 GB, 60-minute video</figcaption>
+  <div class="widget">
+    <div class="row"><label style="flex:1">Seek to <input type="range" id="rg-min" min="0" max="59" value="30" style="flex:1"> <b id="rg-min-v">30:00</b></label></div>
+    <div class="rg-bar" id="rg-bar"><span class="skip"></span><span class="get"></span></div>
+    <div class="split" style="margin-top:10px">
+      <pre id="rg-req"></pre>
+      <pre id="rg-res"></pre>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button type="button" class="ghost" id="rg-peek">Peek: Range bytes=0-7 of photo.bin</button>
+      <button type="button" class="ghost" id="rg-bad">Ask for bytes past the end</button>
+    </div>
+    <div class="out" id="rg-out"></div>
+  </div>
+</figure>
+
+<h2 id="streaming">Adaptive video streaming</h2>
+<p>Range requests serve one version of a file to everyone. Netflix and YouTube do better with <strong>segmented streaming</strong> (HLS or DASH): <strong>transcode</strong> the original into several qualities, cut each into segments of a few seconds, and write a <strong>manifest</strong> listing them all. The player fetches the manifest, then one segment at a time, timing each download to decide the next segment's quality: <strong>adaptive bitrate</strong>.</p>
+<figure class="anim" id="fig-abr">
+  <figcaption class="anim-title">A player adapting to the network, segment by segment</figcaption>
+</figure>
+<p>Nothing changes on the storage side: segments and manifests are just objects, and object storage plus a CDN can serve a streaming platform. The hard engineering is the <strong>transcoding pipeline</strong>: queues and workers triggered on every upload (lesson 14). If video is a small feature, use a hosted service such as Mux or Bunny Stream. If video <em>is</em> your product, building the pipeline yourself is what makes the costs work.</p>
+
+<h2 id="cost">What you pay for</h2>
+<div class="cards">
+  <div class="card"><h4>Storage</h4><p>Per GB per month.</p></div>
+  <div class="card"><h4>Operations</h4><p>Per request. Writes (PUT, POST, LIST…) cost roughly 10× more than reads (GET).</p></div>
+  <div class="card"><h4>Egress</h4><p>Per GB of data leaving the provider. Often the biggest line for media-heavy apps, and why Cloudflare R2's <strong>free egress</strong> is popular.</p></div>
+</div>
+<p class="small muted">Prices change every few years; check your provider's pricing page when designing.</p>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>Object storage trades mutability (no edits, renames, folders or locks) for near-infinite capacity, eleven nines of durability and a plain HTTP interface.</li>
+  <li>Generate keys yourself with randomness up front and ownership encoded; set metadata at write time (changing it means rewriting the object).</li>
+  <li>Durability isn't backup: versioning plus cross-account replication. Your database, not LIST, is the index of files.</li>
+  <li>Stream small uploads through your server with a size cap; send large ones straight to the bucket with presigned POST policies, a pending row, a HEAD check and cleanup.</li>
+  <li>Big files: multipart uploads, part size computed from file size, 4–6 parallel parts, resume via ListParts. Don't trust multipart ETags as checksums, and abort stale uploads with a lifecycle rule on every bucket.</li>
+  <li>Never relay downloads. Use a CDN over a private bucket, presigned GETs (round expiries so the CDN can cache) or CDN-signed cookies; range requests give you seeking, resuming and parallel downloads.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>A 60 GB upload with 5 MB parts fails near the end. Why, and what's the fix?</summary><div><p>10,000 parts × 5 MB = 50 GB, so part 10,001 is rejected after 50 GB has been sent. Compute the part size from the file size: <code>max(16 MB, size ÷ 10,000)</code>, about 6.1 MB here, so 16 MB parts with a 16 MB floor.</p></div></details>
+  <details><summary>Your storage bill keeps rising but the console shows the bucket's size is flat. What might be happening?</summary><div><p>Incomplete multipart uploads: their parts are billed but don't appear as objects. List them with "list multipart uploads" and add an <code>AbortIncompleteMultipartUpload</code> lifecycle rule (e.g. 7 days).</p></div></details>
+  <details><summary>You put a CDN in front of private files served by presigned GET URLs, but the cache hit rate is 0%. Why?</summary><div><p>Every presigned URL has a unique timestamp and signature, so the CDN sees a different resource each time. Round the expiry (e.g. to the next hour) so users share URLs, or use the CDN's own signed URLs/cookies.</p></div></details>
+  <details><summary>How can a video player start playing at minute 45 of a 2 GB file without downloading the first 1.5 GB?</summary><div><p>It computes the byte offset for that timestamp from the file's index and sends a range request (<code>Range: bytes=offset-</code>). The server answers <code>206 Partial Content</code> with just those bytes.</p></div></details>
+  <details><summary>Why does a 50 GB CompleteMultipartUpload return about as fast as a 50 MB one?</summary><div><p>It's a metadata operation: the service records that the object consists of these parts in this order, without physically copying the data.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.seq("#fig-mpu", {
+  actors: ["Client", "S3"],
+  colW: 330, rowH: 40, pad: 90,
+  steps: [
+    { from: 0, to: 1, label: "CreateMultipartUpload (bucket, key, type)", note: "Start a multipart upload for a key." },
+    { from: 1, to: 0, label: "UploadId: \"VXBsb2Fk…\"", ret: true, note: "S3 returns an <b>upload ID</b>: a staging area. Nothing exists at the key yet; a GET would be 404." },
+    { from: 0, to: 1, label: "UploadPart #7 (UploadId, bytes)", note: "Each part is an independent HTTP request. They can run in parallel and arrive in any order: part 7 before part 2 is fine." },
+    { from: 1, to: 0, label: "ETag for #7", ret: true, tone: "ok", note: "Every successful part returns an ETag. Keep them all." },
+    { from: 0, to: 1, label: "UploadPart #2 ✕ network error → retry #2", tone: "bad", note: "A failed part is retried on its own. Nothing else is affected." },
+    { from: 0, to: 1, label: "CompleteMultipartUpload [1:etag, 2:etag, …]", note: "Finally, send the full list of part numbers and their ETags." },
+    { from: 1, to: 0, label: "200: one object, assembled instantly", ret: true, tone: "ok", note: "S3 records which parts make up the object, in order: a metadata operation, just as fast for 50 GB as for 50 MB. (<code>AbortMultipartUpload</code> discards the staging area instead.)" }
+  ]
+});
+
+(function () {
+  var size = document.getElementById("pt-size"), floor = document.getElementById("pt-floor"), tiles = document.getElementById("pt-tiles"), out = document.getElementById("pt-out");
+  function fmt(mb) { return mb >= 1048576 ? (mb / 1048576).toFixed(mb % 1048576 ? 1 : 0) + " TB" : mb >= 1024 ? +(mb / 1024).toFixed(1) + " GB" : Math.round(mb) + " MB"; }
+  function render() {
+    var s = +size.value, f = +floor.value, part = Math.max(f, Math.ceil(s / 10000)), n = Math.ceil(s / part);
+    tiles.innerHTML = '<div class="tile"><small>Part size</small><b>' + fmt(part) + '</b></div><div class="tile"><small>Number of parts</small><b>' + n.toLocaleString("en-US") + '</b></div><div class="tile ' + (part > 100 ? "warn" : "ok") + '"><small>Resent if one part fails</small><b>' + fmt(part) + "</b></div>";
+    out.innerHTML = s > 51200 && f === 5 ? '<span class="verdict ok">✓ Computed from the file size.</span> A <em>fixed</em> 5 MB part size would fail at part 10,001, after 50 GB had already been uploaded.'
+      : s > 51200 ? "Above " + fmt(f * 10000) + ", the floor alone isn't enough, so the part size grows with the file."
+      : "The floor wins: parts stay small, so retries stay cheap.";
+  }
+  size.addEventListener("change", render); floor.addEventListener("change", render); render();
+})();
+
+BD.seq("#fig-arch", {
+  actors: ["Browser", "Your API", "Database", "S3 bucket"],
+  colW: 165, rowH: 38, pad: 70,
+  steps: [
+    { from: 0, to: 1, label: "POST /uploads/init {name, size, type}", note: "The browser announces the file." },
+    { from: 1, to: 3, label: "CreateMultipartUpload", note: "The API authorizes, computes the part size and starts a multipart upload…" },
+    { from: 1, to: 2, label: "INSERT status='pending', uploadId", note: "…records the intent as a pending row…" },
+    { from: 1, to: 0, label: "uploadId, partSize, presigned part URLs", ret: true, note: "…and returns presigned URLs for the parts (the first batch)." },
+    { from: 0, to: 3, label: "PUT part 1…125 (5 in parallel)", note: "The browser slices the file and PUTs parts straight to the bucket, collecting ETags." },
+    { from: 0, to: 1, label: "POST /uploads/complete {uploadId, [n, ETag]…}", note: "When all parts are in, it sends the list to your API (not to S3)." },
+    { from: 1, to: 3, label: "CompleteMultipartUpload + HEAD", note: "The API completes the upload and verifies size and type with a HEAD." },
+    { from: 1, to: 2, label: "UPDATE status='ready' · emit file.uploaded", tone: "ok", note: "The row becomes ready, and a <code>file.uploaded</code> event goes to the queue for processing, audit logs or a WebSocket notification." }
+  ]
+});
+
+(function () {
+  var N = 125, PART = 128, LINK = 200, STREAM = 30, DT = 1;
+  var $ = function (id) { return document.getElementById(id); };
+  var grid = $("up-grid"), conc = $("up-conc"), runBtn = $("up-run");
+  var parts, timer, retries, t, phase;
+  var cells = [];
+  for (var i = 0; i < N; i++) { var c = document.createElement("span"); c.title = "part " + (i + 1); grid.appendChild(c); cells.push(c); }
+  function reset() {
+    clearInterval(timer); timer = null; t = 0; retries = 0; phase = "idle";
+    parts = []; for (var i = 0; i < N; i++) parts.push({ st: "wait", p: 0, flash: 0 });
+    runBtn.textContent = "▶ Start upload"; runBtn.disabled = false; render();
+  }
+  function fill() {
+    var active = parts.filter(function (x) { return x.st === "fly"; }).length;
+    for (var i = 0; i < N && active < +conc.value; i++) if (parts[i].st === "wait") { parts[i].st = "fly"; parts[i].p = 0; active++; }
+  }
+  function tick() {
+    t += DT;
+    var fly = parts.filter(function (x) { return x.st === "fly"; });
+    var rate = fly.length ? Math.min(STREAM, LINK / fly.length) : 0;
+    fly.forEach(function (x) {
+      if (Math.random() < 0.006) { x.st = "fail"; x.flash = 2; x.p = 0; retries++; return; }
+      x.p += rate * DT;
+      if (x.p >= PART) { x.st = "done"; x.p = PART; }
+    });
+    parts.forEach(function (x) { if (x.st === "fail" && --x.flash <= 0) x.st = "wait"; });
+    fill();
+    if (parts.every(function (x) { return x.st === "done"; })) { clearInterval(timer); timer = null; phase = "done"; runBtn.textContent = "✓ Done"; runBtn.disabled = true; }
+    render(rate * fly.length);
+  }
+  function render(mbps) {
+    var done = parts.filter(function (x) { return x.st === "done"; }).length;
+    var bytes = parts.reduce(function (a, x) { return a + (x.st === "fly" || x.st === "done" ? x.p : 0); }, 0);
+    var pct = bytes / (N * PART) * 100;
+    parts.forEach(function (x, i) { cells[i].className = x.st; });
+    $("up-bar").style.width = pct + "%";
+    var mb = Math.round(bytes / 8);
+    var msg;
+    if (phase === "done") msg = '<span class="verdict ok">✓ All 125 parts in. CompleteMultipartUpload with 125 ETags: the 2 GB object exists, in ' + Math.round(t) + " simulated seconds, " + retries + " part retr" + (retries === 1 ? "y" : "ies") + ".</span>";
+    else if (phase === "reloaded") msg = '<span class="verdict bad">Page reloaded: in-flight parts were lost.</span> Ask the API "upload in progress?" → pending row found → <code>ListParts</code>: <b>' + done + "</b> parts already in the bucket. Press <b>Resume</b> to upload only the " + (N - done) + " missing ones.";
+    else msg = mb + " / 2,000 MB · " + done + " of 125 parts · " + (mbps ? Math.round(mbps) + " Mbit/s" : "–") + " · " + Math.round(t) + " s elapsed · " + retries + " retries";
+    $("up-stat").innerHTML = msg;
+  }
+  runBtn.addEventListener("click", function () {
+    if (timer) { clearInterval(timer); timer = null; runBtn.textContent = "▶ Continue"; return; }
+    phase = "run"; fill(); timer = setInterval(tick, 50); runBtn.textContent = "❚❚ Pause";
+  });
+  $("up-refresh").addEventListener("click", function () {
+    if (phase === "done") return;
+    clearInterval(timer); timer = null;
+    parts.forEach(function (x) { if (x.st !== "done") { x.st = "wait"; x.p = 0; } });
+    phase = "reloaded"; runBtn.textContent = "▶ Resume"; render();
+  });
+  conc.addEventListener("input", function () { $("up-conc-v").textContent = conc.value; });
+  $("up-reset").addEventListener("click", reset);
+  reset();
+})();
+
+BD.flow("#fig-cdn", {
+  w: 720, h: 290,
+  nodes: {
+    u1: { x: 80, y: 55, label: "User 1", sub: "", kind: "client", w: 110 },
+    u2: { x: 80, y: 145, label: "User 2", sub: "", kind: "client", w: 110 },
+    u3: { x: 80, y: 235, label: "User 3", sub: "", kind: "client", w: 110 },
+    cdn: { x: 350, y: 145, label: "CDN", sub: "cache", kind: "net", w: 190 },
+    b: { x: 610, y: 145, label: "Private bucket", sub: "egress billed", kind: "db", shape: "cyl", w: 150, h: 70 }
+  },
+  edges: [["u1", "cdn"], ["u2", "cdn"], ["u3", "cdn"], ["cdn", "b"]],
+  steps: [
+    { path: ["u1", "cdn", "b"], packet: "?sig=a1f…", warn: ["cdn"], set: { cdn: "MISS: …sig=a1f" }, note: "User 1 gets a presigned GET URL signed at 10:02:11. The CDN has never seen this exact URL: miss, fetch from the bucket." },
+    { path: [["u2", "cdn", "b"], ["u3", "cdn", "b"]], warn: ["cdn"], set: { cdn: "MISS, MISS · hit rate 0%" }, note: "Users 2 and 3 request the <em>same file</em>, but their URLs carry different timestamps and signatures. To the CDN they're different resources: miss, miss. You pay for the CDN <em>and</em> full egress." },
+    { path: ["u1", "cdn", "b"], fresh: true, packet: "exp=11:00", set: { cdn: "MISS (once)" }, note: "Fix 1: sign every URL to expire at the <b>top of the next hour</b>. Everyone in this hour gets the identical URL…" },
+    { path: [["u2", "cdn"], ["u3", "cdn"]], tone: "ok", ok: ["cdn"], set: { cdn: "HIT, HIT" }, note: "…so after one miss, it's hits. You trade precise expiry for cacheability. Fix 2, at scale: the CDN's own signed URLs or cookies, checked at the edge." }
+  ]
+});
+
+(function () {
+  var TOTAL = 1288490188, $ = function (id) { return document.getElementById(id); };
+  var r = $("rg-min");
+  function n(x) { return x.toLocaleString("en-US"); }
+  function render() {
+    var m = +r.value, off = Math.round(m / 60 * TOTAL);
+    $("rg-min-v").textContent = String(m).padStart(2, "0") + ":00";
+    var bar = $("rg-bar");
+    bar.querySelector(".skip").style.width = (m / 60 * 100) + "%";
+    bar.querySelector(".get").style.width = (100 - m / 60 * 100) + "%";
+    $("rg-req").innerHTML = '<span class="c">// request</span>\n<span class="k">GET</span> /videos/talk.mp4 HTTP/1.1\nHost: cdn.example.com\n<span class="s">Range: bytes=' + off + "-</span>";
+    $("rg-res").innerHTML = '<span class="c">// response</span>\nHTTP/1.1 <span class="n">206 Partial Content</span>\n<span class="s">Content-Range: bytes ' + off + "-" + (TOTAL - 1) + "/" + TOTAL + "</span>\nContent-Type: video/mp4";
+    $("rg-out").innerHTML = m ? "Skipped <b>" + n(Math.round(off / 1048576)) + " MB</b>: the player starts at minute " + m + " immediately." : "From the start: the whole file, still streamed progressively.";
+  }
+  r.addEventListener("input", render);
+  $("rg-peek").addEventListener("click", function () {
+    $("rg-req").innerHTML = '<span class="c">// request</span>\n<span class="k">GET</span> /uploads/photo.bin HTTP/1.1\n<span class="s">Range: bytes=0-7</span>';
+    $("rg-res").innerHTML = '<span class="c">// response</span>\nHTTP/1.1 <span class="n">206 Partial Content</span>\n<span class="s">Content-Range: bytes 0-7/245760</span>\n\n89 50 4E 47 0D 0A 1A 0A   <span class="c">‰PNG␍␊␚␊</span>';
+    $("rg-out").innerHTML = '<span class="verdict ok">The PNG signature: it\'s really a PNG, whatever its name says. 8 bytes downloaded, not 240 KB.</span>';
+  });
+  $("rg-bad").addEventListener("click", function () {
+    $("rg-req").innerHTML = '<span class="c">// request</span>\n<span class="k">GET</span> /videos/talk.mp4 HTTP/1.1\n<span class="s">Range: bytes=5000000000-</span>';
+    $("rg-res").innerHTML = '<span class="c">// response</span>\nHTTP/1.1 <span class="e">416 Range Not Satisfiable</span>\nContent-Range: bytes */' + TOTAL;
+    $("rg-out").innerHTML = '<span class="verdict bad">The file is only ' + n(TOTAL) + " bytes long.</span>";
+  });
+  render();
+})();
+
+(function () {
+  var Q = [2, 1, 1, 0, 0, 0, 1, 2, 2, 1, 0, 0], segs = [];
+  Q.forEach(function (q, i) { segs.push({ lane: q, s: i * 4, d: 3.7, k: ["ok", "cpu", "io"][q] }); });
+  BD.timeline("#fig-abr", {
+    lanes: ["4K · 16 Mbit/s", "1080p · 5 Mbit/s", "480p · 1 Mbit/s"],
+    total: 48, unit: " s", ticks: 6, labelW: 130,
+    legend: [{ k: "ok", label: "4K segment" }, { k: "cpu", label: "1080p segment" }, { k: "io", label: "480p segment" }],
+    segs: segs,
+    steps: [
+      { to: 12, note: "The player reads the manifest and starts with a low-quality segment so playback begins quickly. Segments arrive fast, so it steps up." },
+      { to: 24, note: "The connection is strong: 4K segments download well within their 4 seconds of playtime." },
+      { to: 36, note: "The user walks into a lift. Segment downloads slow down, so the player drops to 1080p, then 480p, rather than stalling." },
+      { to: 48, note: "The network recovers and quality climbs back. The bucket just served ordinary objects throughout." }
+    ]
+  });
+})();
+</script>
+</body>
+</html>

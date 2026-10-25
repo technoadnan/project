@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Caching · Backend Dev</title>
+<meta name="description" content="Cache levels, strategies, eviction and invalidation, and where Redis fits.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="13">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 13</span><span>Video · 1:04:23</span></div>
+  <h1>Caching, the secret behind it all</h1>
+  <p class="lead">Caching means keeping a <strong>subset</strong> of your data somewhere <strong>faster to reach</strong>, so you spend less time and effort getting it again. It's behind almost every fast system you use, and it shows up wherever a system wants to avoid <strong>repeating heavy computation</strong> or <strong>shipping heavy data</strong> over long distances.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>How Google, Netflix and X use caching</li><li>Network caches: CDNs and DNS</li><li>Why RAM-based stores like Redis are fast, and their trade-offs</li><li>Cache-aside vs write-through</li><li>Eviction: LRU, LFU and TTL (with a simulator)</li><li>Everyday backend uses: query results, sessions, external APIs, rate limits</li></ul></div>
+</div>
+<h2 id="what">One idea, everywhere</h2>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>You keep salt, pepper and oil on the kitchen counter and the 10 kg bag of rice in the pantry. The counter is small but right there; the pantry is big but a trip away. A cache is your counter: a <em>small selection</em> of what you use most, placed where it's quickest to grab.</p></aside>
+<div class="cards">
+  <div class="card"><h4>Google search</h4><p>Ranking billions of pages is expensive, and "weather today" is searched millions of times. Results live in a distributed in-memory cache. A <strong>hit</strong> returns instantly; a <strong>miss</strong> runs the full pipeline once, then caches the result.</p></div>
+  <div class="card"><h4>Netflix</h4><p>Each title is encoded in several resolutions and pushed to <strong>edge servers</strong> near viewers. Which titles go where is decided by regional viewing trends; caching everything everywhere would cost too much.</p></div>
+  <div class="card"><h4>X trending topics</h4><p>Analysing millions of posts is heavy, but trends change over hours, not seconds. Compute them every few minutes, store the result in Redis, and serve that to everyone.</p></div>
+</div>
+
+<h2 id="aside">The core pattern: cache-aside</h2>
+<p>Also called <strong>lazy caching</strong>: only cache something once someone actually asks for it.</p>
+<figure class="anim" id="fig-aside">
+  <figcaption class="anim-title">Miss, fill, then hit</figcaption>
+</figure>
+<p>The alternative is <strong>write-through</strong>: whenever you write to the database, update the cache in the same flow. The cache is never stale, but every write does double work.</p>
+<figure class="anim" id="fig-write">
+  <figcaption class="anim-title">Write-through: database and cache updated together</figcaption>
+</figure>
+
+<h2 id="levels">Three levels you'll meet</h2>
+<div class="cards">
+  <div class="card"><h4>Network</h4><p>CDNs and DNS: cache content and lookups close to users.</p></div>
+  <div class="card"><h4>Hardware</h4><p>CPU caches (L1/L2/L3) and RAM.</p></div>
+  <div class="card"><h4>Software</h4><p>Redis, Memcached and friends: libraries you call, running on fast hardware.</p></div>
+</div>
+
+<h3>CDNs: content near the user</h3>
+<p>A <strong>CDN</strong> caches files (videos, images, JS, CSS, whole pages) on <strong>edge servers</strong> grouped into <strong>points of presence (PoPs)</strong> around the world. DNS routes each user to a nearby PoP, taking location and network conditions into account. Each cached item has a <strong>TTL</strong>; after it expires, the edge fetches a fresh copy from the origin. Platforms like Vercel serve front-end apps this way.</p>
+<figure class="anim" id="fig-cdn">
+  <figcaption class="anim-title">The first request fills the edge; the rest are local</figcaption>
+</figure>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>Big retailers don't ship every order from one central warehouse. They stock popular items in local warehouses near customers. The first order of a new item might come from far away; after that it's around the corner.</p></aside>
+
+<h3>DNS: caches at every layer</h3>
+<p>Turning <code>example.com</code> into an IP can take a chain of lookups, so every layer remembers answers for a while (their TTL):</p>
+<figure class="anim" id="fig-dns">
+  <figcaption class="anim-title">Resolving example.com, the first time and the second</figcaption>
+</figure>
+
+<h3>Hardware: why RAM is fast</h3>
+<p>The CPU keeps tiny, ultra-fast caches (L1, L2 and a shared L3) and predicts what you'll need next. That's one reason walking an array in order is so fast. Below them sits RAM, then disk:</p>
+<div class="memory">
+  <div class="lvl"><b>L1 / L2 / L3</b><span class="bar" style="width:18%">fastest</span><span>KB–MB, on the CPU</span></div>
+  <div class="lvl"><b>RAM</b><span class="bar" style="width:40%;opacity:.7">very fast</span><span>GBs, volatile</span></div>
+  <div class="lvl"><b>SSD / HDD</b><span class="bar" style="width:100%;opacity:.45">slower, but big and permanent</span><span>TBs, persistent</span></div>
+</div>
+<p><strong>Random access memory</strong> reaches any address electrically in about the same time, unlike a spinning disk head that must physically move. But RAM is limited and <strong>volatile</strong>: power off and it's gone. So you can't replace disk with RAM; each has its job.</p>
+
+<h3>Redis and Memcached</h3>
+<p>These are <strong>in-memory key–value NoSQL databases</strong> (Redis, Memcached, managed options like AWS ElastiCache, and the open-source Valkey). All reads and writes hit RAM, which makes them very fast. Behind the scenes they can persist to disk and reload on restart. The data model is simple: a key, and a value (a string, number, list, JSON…). No schemas, joins or SQL.</p>
+
+<h2 id="eviction">Eviction: when the cache is full</h2>
+<p>RAM runs out, and a cache is only ever meant to hold a <em>subset</em>. An <strong>eviction policy</strong> decides who leaves to make room:</p>
+<div class="cards c4">
+  <div class="card"><h4>No eviction</h4><p>New writes fail with "memory full". Rarely what you want.</p></div>
+  <div class="card"><h4>LRU</h4><p>Evict the <strong>least recently</strong> used key.</p></div>
+  <div class="card"><h4>LFU</h4><p>Evict the <strong>least frequently</strong> used key.</p></div>
+  <div class="card"><h4>TTL</h4><p>Evict the key closest to expiring.</p></div>
+</div>
+<figure class="anim" id="fig-evict">
+  <figcaption class="anim-title">Try it: a 4-slot cache</figcaption>
+  <div class="widget">
+    <div class="row">
+      <label>Policy <select id="ev-policy"><option value="lru">LRU (least recently used)</option><option value="lfu">LFU (least frequently used)</option><option value="fifo">FIFO (oldest inserted)</option></select></label>
+      <button class="ghost" type="button" id="ev-seq">▶ Play sample sequence</button>
+      <button class="ghost" type="button" id="ev-reset">Reset</button>
+    </div>
+    <div class="row"><span class="small muted">Request a key:</span><div class="keys" id="ev-keys"></div></div>
+    <div class="slots" id="ev-slots"></div>
+    <p class="out" id="ev-log" style="margin:0">Click a key to request it.</p>
+    <p class="small muted" id="ev-stats" style="margin:6px 0 0"></p>
+  </div>
+</figure>
+<aside class="callout analogy"><div class="tag">Analogy</div><p><strong>LRU</strong> is your phone closing the app you haven't opened for the longest. <strong>LFU</strong> is a library keeping its most-borrowed books at the front desk and sending rarely borrowed ones back to storage.</p></aside>
+
+<h2 id="uses">Where backend engineers use Redis</h2>
+<div class="cards">
+  <div class="card"><h4>Expensive queries</h4><p>A heavy join and aggregation behind a busy dashboard? Cache the result with a TTL (say 1 hour) and invalidate it when the underlying data changes. Amazon caches product details during sales; social networks cache profiles. Both are <strong>read-heavy, rarely written</strong>.</p></div>
+  <div class="card"><h4>Sessions</h4><p>Session data is read on <em>every</em> request. Reading it from RAM keeps latency low and takes load off the database (lesson 8).</p></div>
+  <div class="card"><h4>External APIs</h4><p>Calling a weather API on every request burns money and rate limits. The weather doesn't change by the second, so cache it for an hour.</p></div>
+  <div class="card"><h4>Rate limiting</h4><p>A middleware keeps a counter per client IP (from <code>X-Forwarded-For</code>). Over 50 per minute → <code>429</code>. Counters live in Redis so every request doesn't hit Postgres.</p></div>
+</div>
+<pre><span class="c">// rate limiting with Redis: one counter per IP per minute</span>
+<span class="k">const</span> key = <span class="s">`rl:${ip}:${currentMinute}`</span>;
+<span class="k">const</span> count = <span class="k">await</span> redis.incr(key);
+<span class="k">if</span> (count === <span class="n">1</span>) <span class="k">await</span> redis.expire(key, <span class="n">60</span>);
+<span class="k">if</span> (count &gt; <span class="n">50</span>) <span class="k">return</span> res.status(<span class="n">429</span>).json({ message: <span class="s">"Too many requests"</span> });</pre>
+<aside class="callout ok"><div class="tag">Rule of thumb</div><p>Cache data that is <strong>read often</strong>, <strong>changes rarely</strong>, and is <strong>expensive to produce</strong>. Always decide up front how it gets invalidated: a TTL, an explicit delete on write, or write-through.</p></aside>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>A cache stores a subset of data somewhere faster, to avoid repeated heavy computation or heavy data transfer.</li>
+  <li>Hit = found in the cache; miss = go to the source, then (usually) store it.</li>
+  <li>CDNs cache content at edge PoPs near users; DNS caches lookups in the browser, the OS and resolvers.</li>
+  <li>Redis and Memcached are fast because they live in RAM: limited and volatile, but with near-constant access time.</li>
+  <li>Cache-aside fills on demand; write-through updates the cache on every write.</li>
+  <li>Eviction policies (LRU, LFU, TTL) decide what leaves when memory is full.</li>
+  <li>Typical uses: expensive query results, sessions, external API responses, rate-limit counters.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>A user updates their profile but keeps seeing the old one for an hour. What happened, and how do you fix it?</summary><div><p>The profile was cache-aside with a 1-hour TTL and nothing invalidated it on write. Delete (or update) the cache key when the profile changes, or use write-through.</p></div></details>
+  <details><summary>Why not keep the whole database in Redis?</summary><div><p>RAM is far more expensive and limited than disk, and it's volatile. A cache is meant to hold the hot subset; the database remains the durable source of truth.</p></div></details>
+  <details><summary>A viral post is read a million times an hour but edited once. Good cache candidate?</summary><div><p>Excellent: read-heavy, rarely written, and the same for everyone. Cache it with a TTL and invalidate on the rare edit.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.flow("#fig-aside", {
+  w: 720, h: 240,
+  nodes: {
+    c: { x: 75, y: 120, label: "Client", sub: "GET /dashboard", kind: "client", w: 130 },
+    s: { x: 300, y: 120, label: "Server", kind: "server", w: 120 },
+    r: { x: 545, y: 50, label: "Redis", sub: "empty", kind: "cache", w: 130 },
+    db: { x: 545, y: 190, label: "Postgres", sub: "heavy JOIN", kind: "db", shape: "cyl", w: 130, h: 62 }
+  },
+  edges: [["c", "s"], ["s", "r"], ["s", "db"]],
+  steps: [
+    { path: ["c", "s", "r"], packet: "GET key", hl: ["r"], note: "Request 1: the server checks Redis first…" },
+    { path: ["r", "s"], tone: "bad", packet: "miss", bad: ["r"], note: "…a <b>cache miss</b>." },
+    { path: ["s", "db", "s"], packet: "query", warn: ["db"], set: { db: "≈ tens of ms" }, note: "So it runs the expensive query on the database, the slow path." },
+    { path: ["s", "r"], packet: "SET key TTL 1h", ok: ["r"], set: { r: "dashboard ✓ (TTL 1h)" }, note: "It stores the result in Redis with a TTL…" },
+    { path: ["s", "c"], tone: "ok", packet: "200", set: { r: "dashboard ✓ (TTL 1h)" }, note: "…and responds." },
+    { path: ["c", "s", "r", "s", "c"], tone: "ok", packet: "hit", ok: ["r"], set: { r: "dashboard ✓ (TTL 1h)" }, note: "Request 2 (from anyone): a <b>cache hit</b> straight from RAM, often under a millisecond. The database isn't touched." }
+  ]
+});
+
+BD.flow("#fig-write", {
+  w: 720, h: 200,
+  nodes: {
+    c: { x: 75, y: 100, label: "Client", sub: "PATCH /profile", kind: "client", w: 130 },
+    s: { x: 300, y: 100, label: "Server", kind: "server", w: 120 },
+    db: { x: 545, y: 45, label: "Postgres", sub: "bio = old", kind: "db", w: 130 },
+    r: { x: 545, y: 155, label: "Redis", sub: "bio = old", kind: "cache", w: 130 }
+  },
+  edges: [["c", "s"], ["s", "db"], ["s", "r"]],
+  steps: [
+    { path: ["c", "s"], packet: "new bio", hl: ["s"], note: "A write arrives." },
+    { path: [["s", "db"], ["s", "r"]], hl: ["db", "r"], set: { db: "bio = new", r: "bio = new" }, note: "Write-through: update the <b>database and the cache</b> in the same flow." },
+    { path: ["s", "c"], tone: "ok", packet: "200", ok: ["db", "r"], set: { db: "bio = new", r: "bio = new" }, note: "Reads are never stale, at the cost of extra work on every write." }
+  ]
+});
+
+BD.flow("#fig-cdn", {
+  w: 720, h: 280,
+  nodes: {
+    u1: { x: 75, y: 60, label: "User A", sub: "Mumbai", kind: "client", w: 110 },
+    u2: { x: 75, y: 220, label: "User B", sub: "Delhi", kind: "client", w: 110 },
+    pop: { x: 330, y: 140, label: "Edge PoP", sub: "Mumbai · empty", kind: "net", w: 150 },
+    origin: { x: 610, y: 140, label: "Origin", sub: "US data centre", kind: "server", w: 150 }
+  },
+  edges: [["u1", "pop"], ["u2", "pop"], ["pop", "origin", { label: "far away", dashed: true }]],
+  steps: [
+    { path: ["u1", "pop"], packet: "GET movie.mp4", hl: ["pop"], note: "DNS sends User A to the <b>nearest PoP</b>, not the origin in the US." },
+    { path: ["pop", "origin", "pop"], tone: "warn", packet: "miss → fetch", warn: ["pop"], note: "Not cached yet (a <b>miss</b>), so the edge fetches it from the origin across the world." },
+    { path: ["pop", "u1"], tone: "ok", set: { pop: "Mumbai · movie ✓ TTL" }, ok: ["pop"], note: "It serves User A and <b>keeps a copy</b> with a TTL." },
+    { path: ["u2", "pop", "u2"], tone: "ok", packet: "hit", set: { pop: "Mumbai · movie ✓ TTL" }, ok: ["u2"], note: "User B nearby gets a <b>hit</b>: low latency, little buffering, and no load on the origin." }
+  ]
+});
+
+BD.seq("#fig-dns", {
+  actors: ["Browser", "OS cache", "Resolver (ISP/1.1.1.1)", "Root", "TLD .com", "Authoritative"],
+  colW: 130, rowH: 40, pad: 70,
+  steps: [
+    { from: 0, to: 0, label: "browser cache: miss", note: "The browser checks its own DNS cache first: nothing." },
+    { from: 0, to: 1, label: "lookup", note: "It asks the operating system, which has its own cache: also a miss." },
+    { from: 1, to: 2, label: "example.com?", note: "The query goes to a <b>recursive resolver</b> (your ISP's, Google's or Cloudflare's), which checks its cache: miss." },
+    { from: 2, to: 3, label: "example.com?", note: "The resolver asks a <b>root server</b>…" },
+    { from: 3, to: 2, label: "ask .com TLD", ret: true, note: "…which doesn't know the IP but refers it to the <b>.com</b> top-level-domain servers." },
+    { from: 2, to: 4, label: "example.com?", note: "Next it asks the <b>.com TLD</b> server…" },
+    { from: 4, to: 2, label: "ask ns1.example.com", ret: true, note: "…which refers it to example.com's <b>authoritative</b> name server." },
+    { from: 2, to: 5, label: "example.com?", note: "The authoritative server has the real answer." },
+    { from: 5, to: 2, label: "93.184.x.x", ret: true, tone: "ok", note: "The IP comes back. This chain is why it's called a <i>recursive</i> resolver." },
+    { from: 2, to: 0, label: "93.184.x.x (now cached at every layer)", ret: true, tone: "ok", note: "The resolver, the OS and the browser all <b>cache</b> the answer for its TTL." },
+    { from: 0, to: 0, label: "next visit: cache hit", tone: "ok", note: "Next time, the browser answers itself instantly, with no network trips." }
+  ]
+});
+
+(function () {
+  var cap = 4, slots = [], tick = 0, hits = 0, misses = 0, timer = null;
+  var $ = function (id) { return document.getElementById(id); };
+  var policy = $("ev-policy"), slotsEl = $("ev-slots"), log = $("ev-log"), stats = $("ev-stats");
+  "ABCDEF".split("").forEach(function (k) {
+    var b = document.createElement("button"); b.type = "button"; b.textContent = k;
+    b.addEventListener("click", function () { clearInterval(timer); access(k); });
+    $("ev-keys").appendChild(b);
+  });
+  function render(mark) {
+    var html = "";
+    for (var i = 0; i < cap; i++) {
+      var s = slots[i];
+      if (!s) { html += '<div class="slot empty">empty</div>'; continue; }
+      var cls = mark && mark.i === i ? " " + mark.cls : "";
+      html += '<div class="slot' + cls + '"><div class="key">' + s.key + '</div><div class="meta">last used t' + s.last + "<br>uses " + s.freq + " · in t" + s.added + "</div></div>";
+    }
+    slotsEl.innerHTML = html;
+    var total = hits + misses;
+    stats.textContent = total ? "Hits " + hits + " · misses " + misses + " · hit ratio " + Math.round(hits / total * 100) + "%" : "";
+  }
+  function victim() {
+    var p = policy.value, best = 0;
+    for (var i = 1; i < slots.length; i++) {
+      var a = slots[i], b = slots[best];
+      if (p === "lru" && a.last < b.last) best = i;
+      if (p === "lfu" && (a.freq < b.freq || (a.freq === b.freq && a.last < b.last))) best = i;
+      if (p === "fifo" && a.added < b.added) best = i;
+    }
+    return best;
+  }
+  function access(k) {
+    tick++;
+    var i = slots.findIndex(function (s) { return s.key === k; });
+    if (i >= 0) {
+      hits++; slots[i].last = tick; slots[i].freq++;
+      log.innerHTML = "t" + tick + ": <b>" + k + "</b> → <span style='color:var(--ok)'><b>HIT</b></span>, served from cache.";
+      render({ i: i, cls: "hit" }); return;
+    }
+    misses++;
+    if (slots.length < cap) {
+      slots.push({ key: k, last: tick, freq: 1, added: tick });
+      log.innerHTML = "t" + tick + ": <b>" + k + "</b> → <span style='color:var(--bad)'><b>MISS</b></span>, fetched from the database and stored in a free slot.";
+      render({ i: slots.length - 1, cls: "new" }); return;
+    }
+    var v = victim(), old = slots[v];
+    var why = policy.value === "lru" ? "least recently used (t" + old.last + ")" : policy.value === "lfu" ? "least frequently used (" + old.freq + " use" + (old.freq > 1 ? "s" : "") + ")" : "oldest inserted (t" + old.added + ")";
+    render({ i: v, cls: "victim" });
+    log.innerHTML = "t" + tick + ": <b>" + k + "</b> → <span style='color:var(--bad)'><b>MISS</b></span>, cache full. Evicting <b>" + old.key + "</b>: " + why + ".";
+    setTimeout(function () { slots[v] = { key: k, last: tick, freq: 1, added: tick }; render({ i: v, cls: "new" }); }, BD.reduce ? 0 : 650);
+  }
+  function reset() { clearInterval(timer); slots = []; tick = 0; hits = 0; misses = 0; log.textContent = "Click a key to request it."; render(); }
+  $("ev-reset").addEventListener("click", reset);
+  policy.addEventListener("change", reset);
+  $("ev-seq").addEventListener("click", function () {
+    reset();
+    var seq = "AABCDAEBAFCA".split(""), n = 0;
+    timer = setInterval(function () { if (n >= seq.length) { clearInterval(timer); return; } access(seq[n++]); }, BD.reduce ? 50 : 1300);
+  });
+  render();
+})();
+</script>
+</body>
+</html>

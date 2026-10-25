@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Logging, monitoring & observability · Backend Dev</title>
+<meta name="description" content="Logs, metrics and traces: what each answers and how they connect in production.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="18">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 18</span><span>Video · 39:51</span></div>
+  <h1>Logging, monitoring and observability</h1>
+  <p class="lead">Your backend runs on many servers in many regions for users everywhere. When something breaks, you need to know <strong>that</strong> it broke, <strong>where</strong>, and <strong>why</strong>. Logging, monitoring and observability are the practices that answer those questions. There's no finish line: every team implements them somewhere on a spectrum.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>The difference between logging, monitoring and observability</li><li>The three pillars: logs, metrics and traces, and how they link up</li><li>Log levels, and structured vs unstructured logs</li><li>Instrumentation, OpenTelemetry and the usual tool stacks</li><li>How a real debugging session flows from alert to root cause</li></ul></div>
+</div>
+<h2 id="three">Three practices</h2>
+<div class="cards">
+  <div class="card"><h4>Logging</h4><p>Recording important events (logins, queries, failures, security events) with <strong>metadata</strong>: user ID, request ID, latency, function. Your app's diary.</p></div>
+  <div class="card"><h4>Monitoring</h4><p>Continuously tracking system state (CPU, memory, requests per second, open DB connections) in near real time, usually 10–15 s behind, plus trends over time.</p></div>
+  <div class="card"><h4>Observability</h4><p>Being able to work out a system's <strong>internal state</strong> from its external outputs. Requires all three pillars: <strong>logs, metrics and traces</strong>.</p></div>
+</div>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>Monitoring alone is a car's <strong>check-engine light</strong>: it tells you something is wrong and nothing more. Observability is the mechanic plugging in a diagnostic computer that says <em>which</em> sensor failed and when. A decade ago most teams only had the light.</p></aside>
+
+<h2 id="pillars">The three pillars</h2>
+<div class="cards">
+  <div class="card"><h4>Logs → what happened</h4><p>Discrete events with context. Like a diary.</p></div>
+  <div class="card"><h4>Metrics → patterns &amp; trends</h4><p>Numbers over time: requests processed, failure rate, todos created, average latency. Like a car dashboard's gauges.</p></div>
+  <div class="card"><h4>Traces → how components interacted</h4><p>One request's journey (middleware → validation → service → repository → database) as a single transaction. Like a parcel's tracking history.</p></div>
+</div>
+<h3>How they work together</h3>
+<figure class="anim" id="fig-debug">
+  <figcaption class="anim-title">From an alert to the exact failing line</figcaption>
+</figure>
+
+<h2 id="trace">Anatomy of a trace</h2>
+<p>A trace is made of <strong>spans</strong>, one per component or operation, nested inside each other. Seeing them on a timeline makes the slow part obvious:</p>
+<figure class="anim" id="fig-trace">
+  <figcaption class="anim-title">GET /todos: where did the 420 ms go?</figcaption>
+</figure>
+
+<h2 id="logging">Logging well</h2>
+<h3>Levels</h3>
+<div class="table-wrap"><table>
+  <thead><tr><th>Level</th><th>Use for</th><th>Example</th></tr></thead>
+  <tbody>
+    <tr><td><span class="chip">debug</span></td><td>Troubleshooting detail. <strong>Development only.</strong></td><td>"cache lookup key=todos:42"</td></tr>
+    <tr><td><span class="chip acc">info</span></td><td>Normal operations and business events</td><td>"todo created id=t_9"</td></tr>
+    <tr><td><span class="chip warn">warn</span></td><td>Not a success, but not our fault or not critical</td><td>"login failed: wrong password"</td></tr>
+    <tr><td><span class="chip bad">error</span></td><td>Something failed: validation, a DB query, an external call</td><td>"insert todo failed: timeout"</td></tr>
+    <tr><td><span class="chip bad">fatal</span></td><td>Unrecoverable. The app shuts down and is usually restarted</td><td>"cannot connect to database"</td></tr>
+  </tbody>
+</table></div>
+<h3>Structured vs unstructured</h3>
+<p>In <strong>development</strong>, readable coloured console lines make problems easy to spot. In <strong>production</strong>, logs go to tools (the ELK stack, Grafana Loki…) that must <em>parse</em> them, so write <strong>JSON</strong>, where every field (user ID, request ID, status) is machine-readable.</p>
+<figure class="anim" id="fig-logs">
+  <figcaption class="anim-title">Try it: same events, two environments</figcaption>
+  <div class="widget">
+    <div class="row">
+      <label>Environment <select id="lg-env"><option value="dev">Development (pretty, debug+)</option><option value="prod">Production (JSON, info+)</option></select></label>
+      <label>Minimum level <select id="lg-min"><option>debug</option><option>info</option><option>warn</option><option>error</option></select></label>
+    </div>
+    <pre id="lg-out" style="margin:0;max-height:330px;overflow:auto"></pre>
+    <p class="out" id="lg-note" style="margin:8px 0 0"></p>
+  </div>
+</figure>
+<aside class="callout warn"><div class="tag">Remember</div><p>Log enough context to debug (request ID, user ID, operation), but never secrets: no passwords, tokens, card numbers or raw personal data (lesson 16).</p></aside>
+
+<h2 id="instrument">Instrumentation in code</h2>
+<p><strong>Instrumentation</strong> means adding code that measures and records what your functions do. The video's Go to-do app does it in layers:</p>
+<ol>
+  <li>A logger is created at startup: level <code>debug</code> locally and <code>info</code> in production; console format locally and JSON in production, chosen from config.</li>
+  <li>A <strong>monitoring middleware</strong> wraps every request to record timing, status and errors.</li>
+  <li>A <strong>tracing middleware</strong> starts a transaction with the service name, environment, IP, user agent, request ID, user ID and tenant, and puts it in the <strong>request context</strong> (lesson 10).</li>
+  <li>Each service pulls the transaction from the context, adds attributes (user ID, todo title, priority), logs key steps, records errors on the trace, and ends its segment when it returns.</li>
+</ol>
+<pre><span class="c">// inside the "create todo" service (illustrative)</span>
+txn := tracing.FromContext(ctx)
+<span class="k">defer</span> txn.StartSegment(<span class="s">"todo.create"</span>).End()
+txn.AddAttribute(<span class="s">"user_id"</span>, userID)
+
+log.Info().Str(<span class="s">"op"</span>, <span class="s">"todo.create"</span>).Str(<span class="s">"title"</span>, in.Title).Msg(<span class="s">"creating todo"</span>)
+todo, err := s.repo.Create(ctx, in)
+<span class="k">if</span> err != <span class="k">nil</span> {
+    log.Error().Err(err).Str(<span class="s">"op"</span>, <span class="s">"todo.create"</span>).Msg(<span class="s">"insert failed"</span>)
+    txn.NoticeError(err)                    <span class="c">// links the error to this trace</span>
+    <span class="k">return nil</span>, err
+}
+log.Info().Str(<span class="s">"todo_id"</span>, todo.ID).Msg(<span class="s">"todo created"</span>)   <span class="c">// business event</span></pre>
+<p><strong>OpenTelemetry</strong> is the open standard for this: SDKs, APIs and collectors for every major language, so your instrumentation isn't locked to one vendor.</p>
+
+<h2 id="tools">Tools</h2>
+<div class="split">
+  <div class="card"><h4>Open-source stack</h4><p><strong>Prometheus</strong> (metrics), <strong>Loki</strong> + Promtail (logs), <strong>Jaeger</strong> (traces) and <strong>Grafana</strong> (dashboards and alerts). Powerful, but you run and maintain it.</p></div>
+  <div class="card"><h4>All-in-one platforms</h4><p><strong>New Relic</strong>, <strong>Datadog</strong> and similar: logs, metrics, traces and alerting in one place. Simpler if your team is small.</p></div>
+</div>
+<p>It's a <strong>team effort</strong>: developers instrument the code; DevOps sets up collection, storage, dashboards and alerts.</p>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>Logging records events, monitoring tracks state and trends, and observability lets you explain <em>why</em>.</li>
+  <li>The three pillars: logs (what happened), metrics (patterns), traces (how components interacted).</li>
+  <li>Real debugging flows alert → metric → logs → trace → the failing span.</li>
+  <li>Use levels deliberately: debug only in development, info for business events, warn, error and fatal for problems.</li>
+  <li>Pretty logs for humans in development; structured JSON logs for machines in production.</li>
+  <li>Instrument code with request-scoped traces (OpenTelemetry is the standard) and never log secrets.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Error rate is up, but you can't tell which dependency is failing. Which pillar is missing?</summary><div><p>Traces. Metrics showed <em>that</em> errors rose and logs may show individual errors, but traces connect a failing request to the exact component and span where it failed.</p></div></details>
+  <details><summary>Should a wrong password be logged at error level?</summary><div><p>No, warn. It isn't a system failure. (Do log it, without the password, since repeated failures can signal an attack.)</p></div></details>
+  <details><summary>Why do production log tools struggle with plain-text logs?</summary><div><p>They have to guess structure from free text to extract fields like user ID or status. JSON logs give every field a name, so parsing, searching and charting are reliable.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.flow("#fig-debug", {
+  w: 720, h: 240,
+  nodes: {
+    alert: { x: 75, y: 120, label: "Alert", sub: "Slack: error rate 80%", kind: "ext", w: 140 },
+    metric: { x: 255, y: 120, label: "Metrics", sub: "dashboard", kind: "cache", w: 130 },
+    logs: { x: 430, y: 120, label: "Logs", sub: "filtered by metric", kind: "db", w: 140 },
+    trace: { x: 610, y: 120, label: "Trace", sub: "one request", kind: "queue", w: 130 }
+  },
+  edges: [["alert", "metric"], ["metric", "logs"], ["logs", "trace"]],
+  steps: [
+    { path: ["alert"], bad: ["alert"], note: "A threshold you configured fires: <b>error rate above 80%</b> on the API, posted to Slack via a webhook." },
+    { path: ["alert", "metric"], hl: ["metric"], set: { metric: "GET /todos · 80% 401s since 10:02" }, note: "<b>Metrics</b> show the pattern: which endpoint, since when, how bad, and how throughput and latency changed." },
+    { path: ["metric", "logs"], hl: ["logs"], set: { metric: "GET /todos · 80% 401s since 10:02", logs: "level=error status=401 req=7f3a…" }, note: "Click through to the <b>logs</b> behind that metric: each failed request with its method, route, status, user, host and request ID." },
+    { path: ["logs", "trace"], hl: ["trace"], set: { metric: "GET /todos · 80% 401s since 10:02", logs: "level=error status=401 req=7f3a…", trace: "auth middleware → token parse ✕" }, note: "Open the <b>trace</b> for one log line: the request's path through middleware, handler and service, and the exact span where it failed." },
+    { path: ["trace"], ok: ["trace"], set: { metric: "GET /todos · 80% 401s since 10:02", logs: "level=error status=401 req=7f3a…", trace: "root cause found ✓" }, note: "Root cause in minutes, not hours of guessing. That's the payoff of having all three pillars linked." }
+  ]
+});
+
+BD.timeline("#fig-trace", {
+  lanes: ["HTTP request", "auth middleware", "validation", "todo service", "repo: SELECT", "cache: SET"],
+  total: 420, unit: "ms", ticks: 6, labelW: 130,
+  legend: [{ k: "server", label: "span" }, { k: "db", label: "database span" }, { k: "cache", label: "cache span" }, { k: "bad", label: "slow span" }],
+  segs: [
+    { lane: 0, s: 0, d: 420, k: "server", t: "GET /todos · 420 ms" },
+    { lane: 1, s: 5, d: 25, k: "server" },
+    { lane: 2, s: 32, d: 8, k: "server" },
+    { lane: 3, s: 42, d: 370, k: "server", t: "listTodos" },
+    { lane: 4, s: 50, d: 340, k: "bad", t: "SELECT … ORDER BY created_at (340 ms)" },
+    { lane: 5, s: 395, d: 12, k: "cache" }
+  ],
+  steps: [
+    { to: 42, note: "The trace starts with the HTTP request span. Auth and validation are quick child spans." },
+    { to: 395, note: "Inside the service span, one child dominates: the <b>SELECT</b> takes 340 ms of the 420 ms total." },
+    { to: 420, note: "Diagnosis: likely a missing index on <code>created_at</code> (lesson 12). Without the trace, you'd only know \"the endpoint is slow\"." }
+  ]
+});
+
+(function () {
+  var events = [
+    ["info", "server", "starting server", { port: 8080 }],
+    ["info", "db", "connected to database", { pool_max: 10 }],
+    ["debug", "cache", "cache lookup", { key: "todos:u_42", hit: false }],
+    ["info", "http", "request completed", { method: "GET", route: "/todos", status: 200, ms: 38, request_id: "7f3a" }],
+    ["warn", "auth", "login failed: invalid credentials", { user_id: "u_77", request_id: "9b1c" }],
+    ["debug", "todo", "validated payload", { fields: 3 }],
+    ["info", "todo", "todo created", { todo_id: "t_9", user_id: "u_42", request_id: "c2d4" }],
+    ["error", "todo", "insert todo failed", { err: "context deadline exceeded", user_id: "u_42", request_id: "e5f6" }]
+  ];
+  var order = ["debug", "info", "warn", "error", "fatal"];
+  var color = { debug: "var(--faint)", info: "var(--accent)", warn: "var(--warn)", error: "var(--bad)" };
+  var env = document.getElementById("lg-env"), min = document.getElementById("lg-min"), out = document.getElementById("lg-out"), note = document.getElementById("lg-note");
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+  function render() {
+    var prod = env.value === "prod", m = order.indexOf(min.value), shown = 0, hidden = 0, t = 0;
+    var lines = events.map(function (e) {
+      t += 7;
+      if (order.indexOf(e[0]) < m) { hidden++; return null; }
+      shown++;
+      var time = "10:21:" + (t < 10 ? "0" + t : t);
+      if (prod) {
+        var o = Object.assign({ level: e[0], time: "2025-06-01T" + time + "Z", component: e[1], msg: e[2] }, e[3]);
+        return esc(JSON.stringify(o));
+      }
+      var kv = Object.keys(e[3]).map(function (k) { return '<span style="color:var(--faint)">' + k + "=</span>" + esc(e[3][k]); }).join(" ");
+      return '<span style="color:var(--faint)">' + time + '</span> <b style="color:' + color[e[0]] + '">' + ({ debug: "DBG", info: "INF", warn: "WRN", error: "ERR" })[e[0]] + "</b> " + esc(e[2]) + " " + kv;
+    }).filter(Boolean);
+    out.innerHTML = lines.join("\n");
+    note.innerHTML = (prod ? "One JSON object per line, easy for Loki or ELK to parse and query (e.g. <code>request_id=\"e5f6\"</code>)." : "Readable, coloured output for a developer's terminal.") + (hidden ? " " + hidden + " line" + (hidden > 1 ? "s" : "") + " below <b>" + min.value + "</b> hidden." : "");
+  }
+  env.addEventListener("change", function () { min.value = env.value === "prod" ? "info" : "debug"; render(); });
+  min.addEventListener("change", render);
+  render();
+})();
+</script>
+</body>
+</html>

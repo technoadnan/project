@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Testing · Backend Dev</title>
+<meta name="description" content="Unit, integration and end-to-end tests, mocks, TDD and what coverage really tells you.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="27">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 26</span><span>Video · 1:24:32</span></div>
+  <h1>Testing for backend engineers</h1>
+  <p class="lead">A test is just a second program that runs your program and makes claims about what happened. Writing good ones is the hard part: a rushed, incomplete test gives false confidence, which is worse than no test. This lesson covers the tests a backend engineer writes and runs (about 80% of a team's testing): what to fake and what to keep real, how to avoid flaky tests, TDD, and how to measure a test suite honestly.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Tests, runners, assertions and regressions</li><li>Unit, integration, end-to-end, and a better model: what a test may touch</li><li>Test doubles and state vs interaction verification</li><li>Real databases, networks and clocks in tests</li><li>TDD and flaky tests</li><li>Coverage, mutation testing, complexity metrics and static tools</li></ul></div>
+</div>
+<h2 id="what">What a test is</h2>
+<p>Strip away the frameworks and a test is a function that calls your code with chosen inputs and complains if the output isn't what you expected:</p>
+<div class="split">
+<pre><span class="c">// a test with no framework at all</span>
+<span class="k">function</span> testMoveTask() {
+  <span class="k">const</span> board = newBoard();
+  board.move(<span class="n">7</span>, <span class="s">"done"</span>);
+  <span class="k">if</span> (board.columnOf(<span class="n">7</span>) !== <span class="s">"done"</span>)
+    <span class="k">throw new</span> Error(<span class="s">`task 7: want done, got ${board.columnOf(7)}`</span>);
+}</pre>
+<div class="card"><h4>What frameworks add</h4><p>A <strong>runner</strong> finds every test, generates a <code>main</code> that calls them, runs the program and reports results. <code>go test</code>, for instance, writes a <code>_testmain.go</code> and compiles it into a <code>board.test</code> binary. <strong>Assertions</strong> are the checks that fail a test; give them messages that say exactly what was expected and what happened.</p></div>
+</div>
+<p>The most valuable job of a test suite is catching <strong>regressions</strong>: bugs you already fixed coming back when someone changes a function months later. Run the suite in CI on every pull request, and the regression is caught before merge instead of reported by users. That's what lets a team move fast without fear.</p>
+
+<h2 id="kinds">Kinds of tests and a better mental model</h2>
+<div class="cards">
+  <div class="card"><h4>Unit</h4><p>One unit of code in isolation. What's a "unit": a function, a class, a package? There's no universal definition.</p></div>
+  <div class="card"><h4>Integration</h4><p>Two or more parts working together, usually your code plus something you didn't write, like a database. It can bypass auth and go straight to the logic under test.</p></div>
+  <div class="card"><h4>End-to-end</h4><p>The whole system the way a user experiences it: log in, keep the session, open the dashboard, create a task.</p></div>
+</div>
+<div class="pyramid" aria-label="Test pyramid"><div>End-to-end · few · slow · expensive</div><div>Integration · some</div><div>Unit · many · fast · cheap</div></div>
+<p>The pyramid is about <strong>cost</strong>: the higher a test sits, the slower and more expensive it is. But what makes a test expensive? Here's the same behaviour checked four ways:</p>
+<div class="memory wide">
+  <div class="lvl"><b>0.00 s</b><div class="bar" style="width:2%"></div><span>board + mock bus</span></div>
+  <div class="lvl"><b>0.00 s</b><div class="bar" style="width:2%"></div><span>board + real bus and hub</span></div>
+  <div class="lvl"><b>0.00 s</b><div class="bar" style="width:2%"></div><span>real HTTP server, real POST</span></div>
+  <div class="lvl"><b>10.5 s</b><div class="bar" style="width:100%"></div><span>real Postgres (container boot)</span></div>
+</div>
+<p>Going through the entire HTTP stack cost nothing. What cost time was <strong>leaving the process</strong>. So instead of arguing about what counts as a "unit", classify tests by <strong>what they're allowed to touch</strong>:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Size</th><th>May touch</th><th>Flakiness</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Small</strong></td><td>One process. No network, database, filesystem or sleeping.</td><td>Fully deterministic</td></tr>
+    <tr><td><strong>Medium</strong></td><td>Anything on the same machine (a local Postgres or Redis container), but not the internet.</td><td>Low</td></tr>
+    <tr><td><strong>Large</strong></td><td>Anything, including external services.</td><td>Where flakiness lives</td></tr>
+  </tbody>
+</table></div>
+<p>Unlike "unit", this is enforceable: a machine can check whether a test opened a socket. Other names you'll hear (<strong>regression</strong>, <strong>functional</strong>, <strong>performance</strong>, <strong>security</strong> tests) describe a test's purpose, not a new kind; any of them can be small, medium or large.</p>
+
+<h2 id="doubles">Test doubles</h2>
+<p>A real handler writes to Postgres, publishes to Redis, charges a card and sends an email. To test it, you hand it stand-ins that look and act like those services. The category is called <strong>test doubles</strong>, after stunt doubles in films. Most people call them all "mocks", but there are five kinds:</p>
+<div class="tabs">
+  <div class="tab" data-label="Dummy">
+    <p>Passed only because a signature requires it; never actually used.</p>
+<pre><span class="k">const</span> noopLogger = { info() {}, error() {} };
+<span class="k">const</span> svc = <span class="k">new</span> TaskService(repo, noopLogger); <span class="c">// logging is irrelevant here</span></pre>
+  </div>
+  <div class="tab" data-label="Stub">
+    <p>Returns canned answers, whatever you ask.</p>
+<pre><span class="k">const</span> users = { findById: <span class="k">async</span> () =&gt; ({ id: <span class="n">7</span>, name: <span class="s">"Priya"</span>, plan: <span class="s">"pro"</span> }) };</pre>
+  </div>
+  <div class="tab" data-label="Spy">
+    <p>A stub that also records how it was called.</p>
+<pre><span class="k">const</span> calls = [];
+<span class="k">const</span> users = { rename: <span class="k">async</span> (id, name) =&gt; { calls.push({ id, name }); } };
+<span class="c">// later: expect(calls).toEqual([{ id: 7, name: "Priya S." }])</span></pre>
+  </div>
+  <div class="tab" data-label="Mock">
+    <p>Pre-programmed with expectations, and fails the test if they aren't met.</p>
+<pre><span class="k">const</span> mailer = mock&lt;Mailer&gt;();
+mailer.send.expectCalledOnceWith({ to: <span class="s">"priya@example.com"</span>, template: <span class="s">"invite"</span> });</pre>
+  </div>
+  <div class="tab" data-label="Fake">
+    <p>A working but simplified implementation, unfit for production: same inputs and outputs, different internals.</p>
+<pre><span class="k">class</span> InMemoryUserRepo {
+  #rows = <span class="k">new</span> Map();
+  <span class="k">async</span> save(u) { <span class="k">this</span>.#rows.set(u.id, u); }
+  <span class="k">async</span> findById(id) { <span class="k">return this</span>.#rows.get(id) ?? <span class="k">null</span>; }
+}</pre>
+  </div>
+</div>
+<h3>Check the result, not the steps</h3>
+<p>You can end a test two ways: <strong>state verification</strong> asks the system where it ended up ("is task 7 in <em>done</em>? did the sequence number go up?"); <strong>interaction verification</strong> asks a double what it saw ("was <code>publish</code> called twice?"). Watch what happens when someone refactors the handler to publish one combined event instead of two; users see no difference:</p>
+<figure class="anim" id="fig-verify">
+  <figcaption class="anim-title">Try it: refactor without changing behaviour</figcaption>
+  <div class="widget">
+    <div class="row"><label><input type="checkbox" id="vf-refactor"> Refactor: publish one combined event</label></div>
+    <div class="split">
+      <pre id="vf-code"></pre>
+      <div id="vf-tests"></div>
+    </div>
+  </div>
+</figure>
+<p>A test that breaks on refactors that change nothing for users is a <strong>change-detector test</strong>. Default to state verification; use interaction checks only when the interaction <em>is</em> the behaviour, like "the welcome email is sent exactly once".</p>
+<aside class="callout warn"><div class="tag">Don't mock what you don't own</div><p>You mock the payment provider's client so <code>charge()</code> returns <code>{ success: true, newBalance }</code>. Tests pass; production fails. Every field name, duplicate-charge behaviour and error format in that mock came from <em>you</em>. Instead, wrap the provider in your own small interface with your own types, mock <em>that</em>, and add a few contract tests against the provider's sandbox to prove your wrapper matches reality.</p></aside>
+<h3>Design for testability</h3>
+<p>Handlers become hard to test when they build their own dependencies: open their own database connection, create their own Redis client. Pass dependencies in instead (<strong>dependency injection</strong>), and arrange code as a <strong>functional core, imperative shell</strong>:</p>
+<div class="split">
+  <div class="core-shell"><div class="shell"><span>imperative shell: HTTP, Postgres, Redis, payments, email</span><div class="core">functional core<br><small>canMove · price · validate · plan</small></div></div></div>
+  <div class="card"><h4>Pure core, thin shell</h4><p>Decisions and calculations live in pure functions: values in, values out, nothing to mock, trivially testable. All talking to the outside world sits in a thin shell around them, which has little logic left to test.</p></div>
+</div>
+
+<h2 id="real">What to fake, and what to keep real</h2>
+<h3>Databases: keep them real</h3>
+<p>Swapping Postgres for an in-memory fake buys speed and costs <strong>fidelity</strong>. Think about which bugs live in the data layer: a wrong column name, a missing index, a forgotten unique constraint, a transaction that doesn't isolate what you thought, a JSON operator Postgres has and your fake doesn't. You replaced exactly the layer where those bugs live. Use a real database and make it cheap:</p>
+<div class="cards">
+  <div class="card"><h4>Transaction per test</h4><p>Begin a transaction, run the test inside it, roll back. The database is untouched for the next test. Requires code that accepts a transaction handle (dependency injection again).</p></div>
+  <div class="card"><h4>Template databases</h4><p>Run migrations once on a template; each test gets <code>CREATE DATABASE t42 TEMPLATE app_template</code> in milliseconds, so tests can run in parallel.</p></div>
+  <div class="card"><h4>Testcontainers</h4><p>Starts a real database container from your test code (SDKs for most languages) and hands you its address.</p></div>
+</div>
+<figure class="anim" id="fig-tc">
+  <figcaption class="anim-title">A package's tests against real Postgres</figcaption>
+</figure>
+<h3>Networks</h3>
+<p>Wrap external APIs in your own interface and fake that. When you want to test the HTTP client code itself (headers, retries, error parsing), start a real local server in the test (Go's <code>httptest</code>) or intercept at the network layer (MSW in Node). Requests really travel over TCP, but never leave the machine.</p>
+<h3>Time</h3>
+<p><code>sleep(100)</code> then check works on your laptop, and fails on a busy CI machine where the background work took 110 ms. Raising the sleep only makes tests slower until the next failure. Instead, <strong>wait for a condition</strong> (a channel message, a callback, or polling with a timeout), or <strong>inject a clock</strong> you control.</p>
+<aside class="callout note"><div class="tag">Hermetic tests</div><p>A test that brings its whole environment with it, starting what it needs and stopping it afterwards, runs identically on your laptop, a colleague's machine and CI. Testcontainers makes the database hermetic; an injected clock makes time hermetic.</p></aside>
+
+<h2 id="tdd">Test-driven development</h2>
+<p>TDD is a workflow, not a kind of test: write the test <em>before</em> the code, in a loop of three steps.</p>
+<figure class="anim" data-steps id="fig-tdd">
+  <figcaption class="anim-title">Rule: a task can't jump straight from todo to done</figcaption>
+  <div class="frame" data-note="Red: write a test for behaviour that doesn't exist yet, and watch it fail. Imagining how you'll call the code is a design exercise; an awkward test means an awkward API.">
+<pre><span class="k">func</span> TestCannotSkipDoing(t *testing.T) {
+    b := newBoardWithTask(<span class="n">7</span>, <span class="s">"todo"</span>)
+    <span class="k">if</span> err := b.Move(<span class="n">7</span>, <span class="s">"done"</span>); err == <span class="k">nil</span> {
+        t.Errorf(<span class="s">"want error moving todo→done, got nil"</span>)
+    }
+}
+
+<span class="e">--- FAIL: TestCannotSkipDoing (0.00s)
+    board_test.go:12: want error moving todo→done, got nil</span></pre>
+  </div>
+  <div class="frame" data-note="Green: the smallest change that passes, even if it's ugly. Seeing it go from red to green proves the test really checks something.">
+<pre><span class="k">func</span> (b *Board) Move(id <span class="k">int</span>, to <span class="k">string</span>) <span class="k">error</span> {
+    b.mu.Lock(); <span class="k">defer</span> b.mu.Unlock()
+    t := b.tasks[id]
+    <span class="k">if</span> t.Column == <span class="s">"todo"</span> &amp;&amp; to == <span class="s">"done"</span> { <span class="c">// ← new</span>
+        <span class="k">return</span> ErrMustPassDoing
+    }
+    t.Column = to; b.seq++; b.trimHistory()
+    <span class="k">return nil</span>
+}
+
+<span class="s">ok   board  0.004s</span></pre>
+  </div>
+  <div class="frame" data-note="Refactor: the step most people skip. The business rule was buried in a method that also locks, bumps a sequence and trims history. Extract it, re-run: still green.">
+<pre><span class="k">func</span> canMove(from, to <span class="k">string</span>) <span class="k">bool</span> {           <span class="c">// pure: values in, value out</span>
+    <span class="k">return</span> !(from == <span class="s">"todo"</span> &amp;&amp; to == <span class="s">"done"</span>)
+}
+
+<span class="k">func</span> (b *Board) Move(id <span class="k">int</span>, to <span class="k">string</span>) <span class="k">error</span> {
+    b.mu.Lock(); <span class="k">defer</span> b.mu.Unlock()
+    t := b.tasks[id]
+    <span class="k">if</span> !canMove(t.Column, to) { <span class="k">return</span> ErrMustPassDoing }
+    t.Column = to; b.seq++; b.trimHistory()
+    <span class="k">return nil</span>
+}
+
+<span class="s">ok   board  0.004s</span></pre>
+  </div>
+</figure>
+<p>TDD is contested. Kent Beck, who popularised it, restated the loop in 2023 ("Canon TDD"). Ian Cooper's talk <em>TDD, Where Did It All Go Wrong</em> argues people took "unit" to mean "class", mocked everything, and drowned in tests that broke on every refactor; the unit should be a <strong>behaviour</strong>, tested through a module's public interface. DHH's 2014 <em>TDD is dead. Long live testing.</em> pushed back on test-first and designing for mockability. A practical stance: TDD shines when you know what the answer looks like but not how to compute it (parsers, pricing rules, state machines), and gets in the way when you're still exploring what to build.</p>
+
+<h2 id="flaky">Flaky tests</h2>
+<p>A flaky test passes and fails on the same code. It's worse than a missing test: a gap is visible, but flakiness teaches the team "just re-run it", until a real failure gets re-run too. A 2014 study by Luo and colleagues of 201 real flaky-test fixes found three top causes:</p>
+<div class="cards">
+  <div class="card"><div class="k">1</div><h4>Async wait</h4><p>Waiting the wrong way: sleeps instead of conditions. Fix: wait for a signal.</p></div>
+  <div class="card"><div class="k">2</div><h4>Concurrency</h4><p>Things inside the test racing each other. Fix: synchronization primitives (Go's <code>synctest</code>, for example).</p></div>
+  <div class="card"><div class="k">3</div><h4>Test order dependency</h4><p>Test B passes only if test A ran first and left a row, a global or a file behind. It breaks when someone adds a test or turns on parallelism.</p></div>
+</div>
+<p>For a flaky test you can't fix now: <strong>delete</strong> it (more often right than you'd think), or <strong>quarantine</strong> it out of the blocking suite with an owner, a date and a reason. Automatic retries hide the problem.</p>
+
+<h2 id="coverage">Measuring tests: coverage</h2>
+<p><strong>Code coverage</strong> is the share of code executed by your tests. The tool splits each function into branch-free basic blocks, inserts a counter in each, runs the tests and reports blocks that never ran. It records that code <em>ran</em>, not that anything was <em>checked</em>: a suite that calls everything and asserts nothing scores 100%. And it isn't one number:</p>
+<figure class="anim" id="fig-cov">
+  <figcaption class="anim-title">Try it: line coverage vs branch coverage</figcaption>
+  <div class="widget">
+    <div class="row"><span class="small muted">Tests to run:</span>
+      <label><input type="checkbox" id="cv-member" checked> discount(100, member)</label>
+      <label><input type="checkbox" id="cv-guest"> discount(100, guest)</label>
+    </div>
+    <pre id="cv-code"></pre>
+    <div class="tiles" id="cv-tiles"></div>
+  </div>
+</figure>
+<p>What does a coverage number say about quality? Inozemtseva and Holmes (ICSE 2014) generated thousands of test suites for large Java programs and found only a <strong>low to moderate</strong> correlation between coverage and bugs caught, once suite size is held constant. Google's guidance is a useful calibration (60% acceptable, 75% commendable, 90% exemplary), with two warnings: the uncovered red lines tell you more than the percentage, and a mandatory target breeds low-value tests written to hit it.</p>
+<h3>Mutation testing: testing your tests</h3>
+<p>A <strong>mutation testing</strong> tool (Stryker for JavaScript, for example) damages your code on purpose: <code>&lt;</code> becomes <code>&lt;=</code>, <code>+</code> becomes <code>-</code>, a return value becomes empty. Each damaged copy is a <strong>mutant</strong>. If a test fails, the mutant is <em>killed</em>; if all tests still pass, it <em>survived</em>, and your tests aren't really checking that code.</p>
+<figure class="anim" id="fig-mut">
+  <figcaption class="anim-title">Try it: run real mutants against two test suites</figcaption>
+  <div class="widget">
+<pre id="mt-src"></pre>
+    <div class="row"><button type="button" class="act" id="mt-run">Run mutation testing</button><span class="small muted">Both suites have 100% line coverage.</span></div>
+    <div class="table-wrap"><table id="mt-table"></table></div>
+    <div class="out" id="mt-out"></div>
+  </div>
+</figure>
+
+<h2 id="quality">Measuring code: complexity metrics</h2>
+<div class="split">
+  <div class="card"><h4>Cyclomatic complexity</h4><p>Thomas McCabe, 1976: the number of independent paths through a function. Draw it as a graph and compute edges − nodes + 2, or count <strong>1 + decision points</strong> (each <code>if</code>, loop, <code>case</code>, <code>&amp;&amp;</code>, <code>||</code>). The common limit is 10, which McCabe called reasonable but not magical; he noted that a big, flat <code>switch</code> breaks it while staying easy to read.</p></div>
+  <div class="card"><h4>Cognitive complexity</h4><p>SonarSource's measure of how hard code is to <em>understand</em>. A flat <code>switch</code> barely counts; every level of nesting adds more. An <code>if</code> inside a loop inside an <code>if</code> is far harder to hold in your head than three <code>if</code>s in a row.</p></div>
+</div>
+<div class="table-wrap"><table>
+  <thead><tr><th>Code shape</th><th>Cyclomatic</th><th>Cognitive</th></tr></thead>
+  <tbody>
+    <tr><td>Flat <code>switch</code> with 20 cases</td><td><span class="chip bad">21: "too complex"</span></td><td><span class="chip ok">low</span></td></tr>
+    <tr><td>Three levels of nested <code>if</code>/loop</td><td><span class="chip">moderate</span></td><td><span class="chip bad">high</span></td></tr>
+  </tbody>
+</table></div>
+<p>On the task board, the hub's run method scored 8 cyclomatic (third place) but 19 cognitive (top of the list): eight ways in, deeply nested. Treat both numbers as flags that point you at code to look at, not as rules.</p>
+<h3>Tools that find problems without running anything</h3>
+<div class="cards">
+  <div class="card"><h4>Linter</h4><p>Flags suspicious <em>patterns</em>, such as a condition that's always true or an ignored error. Not syntax (the compiler's job) and not correctness.</p></div>
+  <div class="card"><h4>Formatter</h4><p>Rewrites code into the team's standard layout. Changes no behaviour, ends style debates.</p></div>
+  <div class="card"><h4>Type checker</h4><p>Catches type misuse, like arithmetic on a string, often right in your editor (Go, TypeScript, Rust).</p></div>
+  <div class="card"><h4>Static analysis</h4><p>A deeper linter: follows values through the program to find issues without executing it.</p></div>
+</div>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>A test is a program that checks your program; its main value is catching regressions in CI before they reach users.</li>
+  <li>Classify tests by what they touch (process, machine, internet); leaving the process is what costs time and invites flakiness.</li>
+  <li>Know the five doubles. Verify state, not interactions, and don't mock what you don't own: wrap it and contract-test the wrapper.</li>
+  <li>Inject dependencies; keep a pure functional core inside a thin imperative shell.</li>
+  <li>Test against a real database cheaply (transactions, templates, Testcontainers). Wait for conditions, not durations; inject clocks.</li>
+  <li>TDD (red, green, refactor) suits problems with known answers. Fix, delete or quarantine flaky tests; don't auto-retry them.</li>
+  <li>Coverage shows what didn't run; mutation testing shows what isn't checked. Complexity metrics and linters are flags, not verdicts.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>A test sleeps 200 ms waiting for a background job, and fails about once a week in CI. What's the proper fix?</summary><div><p>Stop guessing durations: wait for a completion signal (a channel, callback, or a polling loop with a timeout), or inject a controllable clock. Increasing the sleep just makes it slower and still flaky.</p></div></details>
+  <details><summary>Your repository tests use an in-memory fake and all pass, but production throws "duplicate key value violates unique constraint". What went wrong?</summary><div><p>The fake didn't enforce Postgres's unique constraint, so the test couldn't see the bug. Test the data layer against a real Postgres (Testcontainers, transaction-per-test or template databases).</p></div></details>
+  <details><summary>Merging two event publishes into one broke 40 tests, but users see no change. What kind of tests were they?</summary><div><p>Change-detector tests using interaction verification (asserting how many times <code>publish</code> was called). Prefer asserting the resulting state.</p></div></details>
+  <details><summary>A function has one <code>if</code> without an <code>else</code>, and the only test takes the true path. Line and branch coverage?</summary><div><p>Line coverage 100% (every line ran); branch coverage 50% (the false path was never taken).</p></div></details>
+  <details><summary>Your suite has 95% coverage but a mutation score of 40%. What does that tell you?</summary><div><p>The tests execute the code but don't check much of its behaviour: most deliberate bugs went unnoticed. Strengthen assertions to check exact outputs, edge cases and boundaries.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+(function () {
+  var box = document.getElementById("vf-refactor");
+  function render() {
+    var r = box.checked;
+    document.getElementById("vf-code").innerHTML = r
+      ? '<span class="k">async function</span> moveTask(id, to) {\n  board.move(id, to);\n  <span class="c">// one combined event</span>\n  <span class="k">await</span> bus.publish({ type: <span class="s">"task.moved"</span>,\n    id, to, seq: board.seq });\n}'
+      : '<span class="k">async function</span> moveTask(id, to) {\n  board.move(id, to);\n  <span class="k">await</span> bus.publish({ type: <span class="s">"task.moved"</span>, id, to });\n  <span class="k">await</span> bus.publish({ type: <span class="s">"board.updated"</span>,\n    seq: board.seq });\n}';
+    function row(name, code, pass) { return '<div class="card" style="margin-bottom:8px"><h4>' + name + ' <span class="chip ' + (pass ? "ok" : "bad") + '">' + (pass ? "✓ pass" : "✕ fail") + '</span></h4><pre style="margin:6px 0 0">' + code + "</pre></div>"; }
+    document.getElementById("vf-tests").innerHTML =
+      row("State verification", 'expect(board.columnOf(<span class="n">7</span>)).toBe(<span class="s">"done"</span>);\nexpect(board.seq).toBe(<span class="n">2</span>);', true) +
+      row("Interaction verification", 'expect(bus.publish)\n  .toHaveBeenCalledTimes(<span class="n">2</span>);', !r) +
+      (r ? '<p class="small muted" style="margin:0">Same board, same browsers updated. Only the change-detector test noticed.</p>' : "");
+  }
+  box.addEventListener("change", render); render();
+})();
+
+(function () {
+  var segs = [{ lane: 0, s: 0, d: 7, k: "wait", t: "start Postgres 18, wait for connections" }, { lane: 0, s: 7, d: 0.4, k: "db" }];
+  for (var i = 0; i < 9; i++) segs.push({ lane: 1, s: 7.4 + i * 0.34, d: 0.3, k: "cpu" });
+  BD.timeline("#fig-tc", {
+    lanes: ["Container (once)", "9 tests"],
+    total: 10.5, unit: " s", ticks: 7, labelW: 130,
+    legend: [{ k: "wait", label: "container start" }, { k: "db", label: "migrate template" }, { k: "cpu", label: "test on its own template copy" }],
+    segs: segs,
+    steps: [
+      { to: 7.4, note: "Testcontainers starts a real Postgres 18 container: ~7 seconds, <b>once per package</b>, not once per test. Migrations run on a template database." },
+      { to: 10.5, note: "Each of the 9 tests copies the template into its own database in milliseconds and runs against real Postgres. Whole package: ~10.5 s, real constraints, real SQL." }
+    ]
+  });
+})();
+
+(function () {
+  var m = document.getElementById("cv-member"), g = document.getElementById("cv-guest");
+  var L = ['<span class="k">function</span> discount(total, isMember) {', '  <span class="k">let</span> d = <span class="n">0</span>;', '  <span class="k">if</span> (isMember) {', '    d = <span class="n">0.1</span>;', "  }", '  <span class="k">return</span> total * (<span class="n">1</span> - d);', "}"];
+  function render() {
+    var M = m.checked, G = g.checked, any = M || G;
+    var exec = { 1: any, 2: any, 3: M, 5: any };
+    var html = L.map(function (ln, i) {
+      if (!(i in exec)) return '<span class="cv-line">  ' + ln + "</span>";
+      var mark = exec[i] ? '<span class="cv-hit">✓</span> ' : '<span class="cv-miss">✕</span> ';
+      var br = i === 2 ? '   <span class="c">// branches: true ' + (M ? "✓" : "✕") + ", false " + (G ? "✓" : "✕") + "</span>" : "";
+      return '<span class="cv-line ' + (exec[i] ? "hit" : "miss") + '">' + mark + ln + br + "</span>";
+    }).join("");
+    document.getElementById("cv-code").innerHTML = html;
+    var lines = [1, 2, 3, 5].filter(function (k) { return exec[k]; }).length, branches = (M ? 1 : 0) + (G ? 1 : 0);
+    var lp = Math.round(lines / 4 * 100), bp = Math.round(branches / 2 * 100);
+    var cls = function (p) { return p === 100 ? "ok" : p >= 50 ? "warn" : "bad"; };
+    document.getElementById("cv-tiles").innerHTML = '<div class="tile ' + cls(lp) + '"><small>Line coverage</small><b>' + lp + '%</b></div><div class="tile ' + cls(bp) + '"><small>Branch coverage</small><b>' + bp + "%</b></div>";
+  }
+  m.addEventListener("change", render); g.addEventListener("change", render); render();
+})();
+
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var ITEMS = []; for (var i = 1; i <= 25; i++) ITEMS.push(i);
+  function make(variant) {
+    return function (items, page, limit) {
+      var offset = variant === "offset" ? page * limit : (page - 1) * limit, out = [];
+      for (var i = offset; variant === "le" ? i <= offset + limit : variant === "minus" ? i < offset - limit : i < offset + limit; i++) {
+        if (variant !== "bound" && i >= items.length) break;
+        out.push(items[i]);
+      }
+      return variant === "empty" ? [] : out;
+    };
+  }
+  var MUTANTS = [
+    { id: "le", label: "<code>i &lt; offset + limit</code> → <code>i &lt;= offset + limit</code>" },
+    { id: "offset", label: "<code>(page - 1) * limit</code> → <code>page * limit</code>" },
+    { id: "minus", label: "<code>offset + limit</code> → <code>offset - limit</code>" },
+    { id: "bound", label: "remove the <code>i &gt;= items.length</code> check" },
+    { id: "empty", label: "<code>return out</code> → <code>return []</code>" }
+  ];
+  var WEAK = [function (f) { return Array.isArray(f(ITEMS, 1, 10)); }, function (f) { return f(ITEMS, 1, 10).length > 0; }, function (f) { try { f(ITEMS, 3, 10); return true; } catch (e) { return false; } }];
+  var STRONG = [
+    function (f) { return JSON.stringify(f(ITEMS, 1, 10)) === JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]); },
+    function (f) { return JSON.stringify(f(ITEMS, 2, 10)) === JSON.stringify([11, 12, 13, 14, 15, 16, 17, 18, 19, 20]); },
+    function (f) { return JSON.stringify(f(ITEMS, 3, 10)) === JSON.stringify([21, 22, 23, 24, 25]); }
+  ];
+  $("mt-src").innerHTML = '<span class="k">function</span> paginate(items, page, limit) {\n  <span class="k">const</span> offset = (page - <span class="n">1</span>) * limit, out = [];\n  <span class="k">for</span> (<span class="k">let</span> i = offset; i &lt; offset + limit; i++) {\n    <span class="k">if</span> (i &gt;= items.length) <span class="k">break</span>;\n    out.push(items[i]);\n  }\n  <span class="k">return</span> out;\n}\n\n<span class="c">// weak suite:   returns an array · length &gt; 0 · doesn\'t throw</span>\n<span class="c">// strong suite: page 1 = [1..10] · page 2 = [11..20] · last page = [21..25]</span>';
+  function survives(suite, f) { return suite.every(function (t) { return t(f); }); }
+  $("mt-table").innerHTML = "<thead><tr><th>Mutant</th><th>Weak suite</th><th>Strong suite</th></tr></thead><tbody>" + MUTANTS.map(function (mu) { return "<tr><td>" + mu.label + '</td><td data-s="w-' + mu.id + '">–</td><td data-s="s-' + mu.id + '">–</td></tr>'; }).join("") + "</tbody>";
+  $("mt-run").addEventListener("click", function () {
+    var killW = 0, killS = 0, i = 0;
+    var cells = $("mt-table").querySelectorAll("td[data-s]");
+    Array.prototype.forEach.call(cells, function (c) { c.innerHTML = "–"; });
+    (function next() {
+      if (i >= MUTANTS.length) {
+        $("mt-out").innerHTML = 'Mutation score: weak suite <span class="verdict ' + (killW < 5 ? "bad" : "ok") + '">' + killW + "/5 = " + killW * 20 + '%</span> strong suite <span class="verdict ok">' + killS + "/5 = " + killS * 20 + "%</span>. Same coverage; very different protection.";
+        return;
+      }
+      var mu = MUTANTS[i], f = make(mu.id), w = survives(WEAK, f), s = survives(STRONG, f);
+      if (!w) killW++; if (!s) killS++;
+      $("mt-table").querySelector('[data-s="w-' + mu.id + '"]').innerHTML = w ? '<span class="chip bad">survived</span>' : '<span class="chip ok">killed</span>';
+      $("mt-table").querySelector('[data-s="s-' + mu.id + '"]').innerHTML = s ? '<span class="chip bad">survived</span>' : '<span class="chip ok">killed</span>';
+      i++; setTimeout(next, 350);
+    })();
+  });
+})();
+</script>
+</body>
+</html>

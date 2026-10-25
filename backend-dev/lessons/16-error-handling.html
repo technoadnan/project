@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Error handling · Backend Dev</title>
+<meta name="description" content="Kinds of errors, catching them early, recovery and graceful degradation, a global error handler, and safe error messages.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="16">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 16</span><span>Video · 1:09:25</span></div>
+  <h1>Error handling and fault-tolerant systems</h1>
+  <p class="lead">Errors aren't exceptional: queries fail, external APIs time out, users send bad data, and logic hits edge cases. The question is never <em>whether</em> errors happen, but <strong>how ready you are</strong> to detect, contain and recover from them. This lesson is about a <strong>fault-tolerant mindset</strong>, not a framework.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>The five kinds of errors you'll meet, and which are most dangerous</li><li>Catching problems before users do: health checks and monitoring</li><li>Recoverable vs non-recoverable errors, graceful degradation and error boundaries</li><li>Building a global error handler</li><li>Error messages and logs that don't leak secrets</li></ul></div>
+</div>
+<h2 id="types">Five kinds of errors</h2>
+<div class="tabs">
+  <div class="tab" data-label="Logic">
+    <p><strong>The sneakiest and most dangerous.</strong> Nothing crashes; the code just does the wrong thing. An e-commerce store applies a discount twice and produces negative shipping costs, losing money on every order for weeks before anyone notices.</p>
+    <p>Usual causes: <strong>misunderstood requirements</strong>, a <strong>slightly wrong algorithm</strong>, <strong>edge cases nobody considered</strong>.</p>
+  </div>
+  <div class="tab" data-label="Database">
+    <ul>
+      <li><strong>Connection errors</strong>: the network is down, the DB is overloaded, or the <strong>connection pool</strong> is exhausted. The whole app stops working.</li>
+      <li><strong>Constraint violations</strong>: a duplicate email (unique), or an order pointing at a customer that doesn't exist (foreign key). Stronger validation prevents some; uniqueness only the database can know.</li>
+      <li><strong>Query errors</strong>: typos in table names, queries so complex they time out.</li>
+      <li><strong>Deadlocks</strong>: operations waiting on each other in a circle.</li>
+    </ul>
+  </div>
+  <div class="tab" data-label="External services">
+    <p>Payment processors, email providers, S3, Redis, Auth0 or Clerk: each is a failure point you don't control, but can't realistically avoid.</p>
+    <ul>
+      <li><strong>Network</strong>: timeouts, DNS failures, network partitions.</li>
+      <li><strong>Auth</strong>: bad credentials, expired tokens, missing permissions.</li>
+      <li><strong>Rate limits</strong>: <code>429</code> responses. Back off exponentially (wait 1, 2, 4 minutes…) until it succeeds.</li>
+      <li><strong>Outages</strong>: they <em>will</em> happen (even big clouds go down). Have fallbacks, e.g. if Redis is down, use an in-memory cache.</li>
+    </ul>
+  </div>
+  <div class="tab" data-label="Input validation">
+    <p>Bad data from clients: wrong format, out-of-range values, missing required fields. These are <strong>the easiest to handle</strong>: you know the rules, so enforce them at the entry point and return <code>400</code> (lesson 9).</p>
+  </div>
+  <div class="tab" data-label="Configuration">
+    <p>The classic: you add <code>OPENAI_API_KEY</code> locally, ship the feature, and forget to set it in production. These errors appear when moving between dev, staging and production.</p>
+  </div>
+</div>
+<h3>Fail fast on configuration</h3>
+<p>Validate every required config value <strong>before the server starts</strong>. A crash at startup is the best case, not the worst.</p>
+<figure class="anim" id="fig-config">
+  <figcaption class="anim-title">Missing env var: crash at deploy, or fail in front of users?</figcaption>
+</figure>
+
+<h2 id="detect">The best error handling starts before the error</h2>
+<p>Finding problems the moment they appear, before they spread, beats any clever recovery.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>A <code>/health</code> endpoint returning 200 is a doctor checking your pulse. Useful, but it doesn't tell you much. Deep health checks are the blood tests: they confirm the organs are actually doing their job.</p></aside>
+<div class="cards">
+  <div class="card"><h4>Basic health check</h4><p><code>GET /health</code> → <code>200</code>. External tools ping it constantly; the status code is what matters.</p></div>
+  <div class="card"><h4>Database checks</h4><p>Can we connect? How long does a representative query take? 500 ms creeping up to 4 s is a warning sign.</p></div>
+  <div class="card"><h4>External services</h4><p>Test transactions for payments, test emails to an internal inbox, test tokens against your auth provider.</p></div>
+  <div class="card"><h4>Core functionality</h4><p>Config loaded, essential caches warm, internal data consistent.</p></div>
+</div>
+<h3>Monitoring and observability</h3>
+<p>Covered in depth in lesson 18. The key ideas for error handling:</p>
+<ul>
+  <li>Track errors from <strong>every</strong> source: HTTP, database, external services, business logic.</li>
+  <li><strong>Watch performance, not just errors.</strong> Slowing response times and rising resource use usually come <em>before</em> a failure.</li>
+  <li><strong>Watch business metrics.</strong> A sudden drop in successful checkouts signals a problem even when error rates look normal.</li>
+  <li>Use <strong>structured (JSON) logs</strong> that tools like Grafana Loki can parse, search and chart.</li>
+</ul>
+
+<h2 id="respond">Responding to errors</h2>
+<div class="split">
+  <div class="card"><h4>Recoverable → retry</h4><p>A failed email send, a temporarily exhausted connection pool, a network blip. <strong>Retry with exponential backoff</strong>, but don't pile extra load onto a system that's already struggling.</p></div>
+  <div class="card"><h4>Non-recoverable → contain &amp; degrade</h4><p>Serve cached data, switch off non-essential features, offer an alternative, and keep the damage contained to one area.</p></div>
+</div>
+<figure class="anim" id="fig-degrade">
+  <figcaption class="anim-title">Graceful degradation: one dependency fails, the page still works</figcaption>
+</figure>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>When a café's card machine dies, it doesn't close. It takes cash and maybe stops serving the fancy drinks. Customers get a slightly reduced service instead of a locked door.</p></aside>
+<h3>Recovery</h3>
+<ul>
+  <li><strong>Automatic</strong>: restart a hung process, clear a corrupted cache, fail over to a backup. Test these, since a bad recovery can make things worse.</li>
+  <li><strong>Manual</strong>: some incidents need human judgement. <strong>Document the runbook</strong> and rehearse it, so it can be done quickly under stress.</li>
+  <li><strong>Data first</strong>: code can be redeployed; data can't. Take backups at key moments, and know how to restore them and replay transaction logs.</li>
+</ul>
+<h3>Propagation and error boundaries</h3>
+<p>Not every error should be handled where it happens. Often a low-level error should be <strong>wrapped with context and bubbled up</strong> to a level that knows what it means for the business. But keep that flow deliberate, so an error doesn't escape and take down the whole process or neighbouring services.</p>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>Ships have <strong>watertight compartments</strong>: a breach floods one section, not the whole hull. Separate processes, timeouts at service boundaries and message queues between services (lesson 14) are your compartments.</p></aside>
+
+<h2 id="global">The final safety net: a global error handler</h2>
+<p>Errors can come from any layer: validation in the handler, business rules in the service, database errors in the repository. Instead of handling each one in place, <strong>bubble them all up</strong> (throw in JS or Python, return in Go) to one <strong>error-handling middleware</strong> that turns each kind into the right response.</p>
+<figure class="anim" id="fig-global">
+  <figcaption class="anim-title">Every error ends up in one place</figcaption>
+</figure>
+<pre><span class="c">// global error-handling middleware (Express-style)</span>
+app.use((err, req, res, next) =&gt; {
+  <span class="k">if</span> (err <span class="k">instanceof</span> ValidationError)
+    <span class="k">return</span> res.status(<span class="n">400</span>).json({ message: <span class="s">"Invalid input"</span>, errors: err.fields });
+  <span class="k">if</span> (err.code === <span class="s">"unique_violation"</span>)          <span class="c">// Postgres 23505</span>
+    <span class="k">return</span> res.status(<span class="n">409</span>).json({ message: <span class="s">"Book already exists"</span> });     <span class="c">// some APIs use 400</span>
+  <span class="k">if</span> (err <span class="k">instanceof</span> NoRowsError)
+    <span class="k">return</span> res.status(<span class="n">404</span>).json({ message: <span class="s">`Book ${req.params.id} not found`</span> });
+  <span class="k">if</span> (err.code === <span class="s">"foreign_key_violation"</span>)    <span class="c">// Postgres 23503</span>
+    <span class="k">return</span> res.status(<span class="n">404</span>).json({ message: <span class="s">"Author not found"</span> });
+  logger.error({ err, requestId: req.ctx.requestId }); <span class="c">// full details stay in logs</span>
+  <span class="k">return</span> res.status(<span class="n">500</span>).json({ message: <span class="s">"Something went wrong"</span> }); <span class="c">// never leak internals</span>
+});</pre>
+<div class="split">
+  <div class="card"><h4>More robust</h4><p>Forget to handle a unique violation in one repository method and the user gets a vague 500. With a central handler, every case is covered once, everywhere.</p></div>
+  <div class="card"><h4>Less duplication</h4><p>No copy-pasted "is it unique? foreign key? no rows?" checks in every repository method. Set it up once and tweak it over time.</p></div>
+</div>
+
+<h2 id="security">Errors and security</h2>
+<ul>
+  <li><strong>Never forward raw errors to clients.</strong> Database messages contain table, column and constraint names, a map for attackers. Unknown errors get a generic "Something went wrong"; details go to your logs.</li>
+  <li><strong>Keep auth errors generic</strong>: "Invalid email or password", never "No user with this email" (lesson 8). The OWASP Cheat Sheet Series is a great reference.</li>
+  <li><strong>Don't log secrets</strong>: passwords, emails, API keys, card numbers. Logs are shipped to many external services, and leaked logs feature in many major breaches. Log the user ID and a correlation (request) ID instead.</li>
+</ul>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>Plan for errors: logic, database, external services, validation and configuration.</li>
+  <li>Logic errors are the most dangerous because nothing crashes; validation errors are the easiest.</li>
+  <li>Validate configuration at startup so a bad deploy fails before it serves traffic.</li>
+  <li>Detect early: deep health checks, plus monitoring of errors, performance and business metrics.</li>
+  <li>Retry what's recoverable; contain and degrade gracefully what isn't. Protect data above all.</li>
+  <li>Bubble errors to a global handler that maps them to the right status codes and generic messages.</li>
+  <li>Never leak internals in responses, and never log sensitive data.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Your recommendation service is down. Should the product page return 500?</summary><div><p>No. It's non-essential: degrade gracefully by hiding the section or showing bestsellers from cache. The product, cart and checkout should keep working.</p></div></details>
+  <details><summary>Why is "crash on startup if <code>DATABASE_URL</code> is missing" a good thing?</summary><div><p>With rolling or blue-green deployments, the old version keeps serving while the new one fails its startup checks, so users never see the problem. Discovering it at request time means real users get 500s.</p></div></details>
+  <details><summary>A repository throws <code>duplicate key value violates unique constraint "books_name_key"</code>. What should the client see?</summary><div><p>A clean 409 (or 400) with "A book with this name already exists". Never the raw message, which reveals table and constraint names.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.flow("#fig-config", {
+  w: 720, h: 250,
+  nodes: {
+    dep: { x: 80, y: 125, label: "Deploy v2", sub: "OPENAI_API_KEY unset", kind: "ext", w: 150 },
+    v2: { x: 320, y: 60, label: "v2 instance", sub: "starting…", kind: "server", w: 150 },
+    v1: { x: 320, y: 190, label: "v1 instance", sub: "serving traffic", kind: "server", w: 150 },
+    users: { x: 600, y: 125, label: "Users", sub: "", kind: "client", w: 130 }
+  },
+  edges: [["dep", "v2"], ["v2", "users"], ["v1", "users"]],
+  steps: [
+    { path: ["dep", "v2"], hl: ["v2"], ok: ["v1"], note: "<b>With startup validation:</b> v2 boots and checks every required config value first." },
+    { path: ["v2"], bad: ["v2"], ok: ["v1"], set: { v2: "✕ missing OPENAI_API_KEY: exit" }, note: "The key is missing, so v2 <b>refuses to start</b> with a clear message for whoever is deploying." },
+    { path: ["v1", "users"], tone: "ok", ok: ["v1", "users"], set: { v2: "✕ missing OPENAI_API_KEY: exit", users: "unaffected ✓" }, note: "The deployment never completes, so v1 keeps serving. Users notice nothing; you fix the config and redeploy." },
+    { path: ["dep", "v2", "users"], warn: ["v2"], set: { v2: "started (no checks)", v1: "replaced", users: "" }, dim: ["v1"], note: "<b>Without validation:</b> v2 starts happily and takes over traffic…" },
+    { path: ["users", "v2", "users"], tone: "bad", packet: "POST /generate-image", bad: ["users", "v2"], set: { v2: "reads key → undefined", v1: "replaced", users: "500 ✕" }, dim: ["v1"], note: "…until a user hits the new feature, the code reads the missing key, and real users get <b>500s</b>. The worst case." }
+  ]
+});
+
+BD.flow("#fig-degrade", {
+  w: 720, h: 260,
+  nodes: {
+    u: { x: 70, y: 130, label: "Product page", kind: "client", w: 120 },
+    api: { x: 260, y: 130, label: "API", kind: "server", w: 110 },
+    prod: { x: 500, y: 40, label: "Products DB", sub: "ok", kind: "db", w: 140 },
+    reco: { x: 500, y: 130, label: "Recommendations", sub: "ok", kind: "ext", w: 160 },
+    cache: { x: 500, y: 220, label: "Cached bestsellers", sub: "fallback", kind: "cache", w: 170 }
+  },
+  edges: [["u", "api"], ["api", "prod"], ["api", "reco"], ["api", "cache", { dashed: true }]],
+  steps: [
+    { path: [["api", "prod"], ["api", "reco"]], ok: ["prod", "reco"], dim: ["cache"], note: "Normally the page shows product details plus personalised recommendations." },
+    { path: ["api", "reco"], tone: "bad", bad: ["reco"], set: { reco: "down / timeout" }, dim: ["cache"], note: "The recommendation service goes down. A <b>timeout</b> stops it from hanging the whole request." },
+    { path: ["api", "cache"], tone: "ok", ok: ["cache", "prod"], set: { reco: "down / timeout" }, note: "<b>Contain and degrade:</b> fall back to cached bestsellers instead of personalised picks." },
+    { path: ["api", "u"], tone: "ok", packet: "200", ok: ["u"], set: { reco: "down / timeout", u: "works (slightly less smart)" }, note: "The user still sees the product and can buy it. A minor issue never became a major failure." }
+  ]
+});
+
+BD.flow("#fig-global", {
+  w: 720, h: 320,
+  nodes: {
+    c: { x: 70, y: 60, label: "Client", kind: "client", w: 110 },
+    h: { x: 235, y: 60, label: "Handler", sub: "validation", kind: "server", w: 120 },
+    s: { x: 400, y: 60, label: "Service", sub: "business rules", kind: "server", w: 130 },
+    r: { x: 565, y: 60, label: "Repository", sub: "SQL", kind: "db", w: 130 },
+    geh: { x: 400, y: 230, label: "Global error handler", sub: "maps error → response", kind: "queue", w: 220, h: 64 }
+  },
+  edges: [["c", "h"], ["h", "s"], ["s", "r"], ["h", "geh", { dashed: true }], ["s", "geh", { dashed: true }], ["r", "geh", { dashed: true }], ["geh", "c"]],
+  steps: [
+    { path: ["c", "h"], packet: "POST /books (700-char name)", bad: ["h"], set: { h: "✕ name > 500 chars" }, note: "A book name of 700 characters breaks the 500-character rule in the handler's <b>validation</b>." },
+    { path: ["h", "geh", "c"], tone: "warn", packet: "400", set: { h: "✕ name > 500 chars", geh: "ValidationError → 400" }, hl: ["geh"], note: "It's thrown up to the global handler: <b>400 Bad Request</b> with field errors the user can fix." },
+    { path: ["c", "h", "s", "r"], packet: "POST /books", fresh: true, bad: ["r"], set: { r: "✕ unique_violation" }, note: "Next request: valid input, but the INSERT hits a <b>unique constraint</b>. That name already exists." },
+    { path: ["r", "geh", "c"], tone: "warn", packet: "409", set: { r: "✕ unique_violation", geh: "unique → 409 \"already exists\"" }, hl: ["geh"], note: "It bubbles up unchanged and is mapped to <b>409 Conflict</b> (or 400): \"Book already exists\"." },
+    { path: ["c", "h", "s", "r"], packet: "GET /books/123", fresh: true, bad: ["r"], set: { r: "✕ no rows" }, note: "<code>GET /books/123</code>: the SELECT returns <b>no rows</b>…" },
+    { path: ["r", "geh", "c"], tone: "warn", packet: "404", set: { r: "✕ no rows", geh: "no rows → 404" }, hl: ["geh"], note: "…which the handler maps to <b>404</b>: \"Book 123 not found\"." },
+    { path: ["c", "h", "s"], packet: "GET /books", fresh: true, bad: ["s"], set: { s: "✕ TypeError (bug)" }, note: "Finally, an unexpected bug in the service: a type error nobody anticipated." },
+    { path: ["s", "geh", "c"], tone: "bad", packet: "500", set: { s: "✕ TypeError (bug)", geh: "unknown → log + 500" }, bad: ["geh"], note: "Unknown errors are <b>logged in full</b> (with the request ID) but the client only sees <b>500 \"Something went wrong\"</b>. No internals leak." }
+  ]
+});
+</script>
+</body>
+</html>

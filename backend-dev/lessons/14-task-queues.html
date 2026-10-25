@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Task queues & background jobs · Backend Dev</title>
+<meta name="description" content="Producers, brokers and consumers: retries, scheduling, workflows and best practices.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="14">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 14</span><span>Video · 55:47</span></div>
+  <h1>Task queues and background jobs</h1>
+  <p class="lead">A <strong>background job</strong> is any work that runs <strong>outside the request–response cycle</strong>: it doesn't need to finish before the user gets an answer. Push it onto a <strong>queue</strong>, respond immediately, and let separate <strong>workers</strong> do it, with automatic retries if something fails.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Why sending an email inside a request is risky</li><li>Producers, brokers, consumers, acknowledgements and visibility timeouts</li><li>Retries with exponential backoff</li><li>One-off, recurring, chained and batch tasks</li><li>Idempotency, monitoring, scaling and best practices</li></ul></div>
+</div>
+<h2 id="why">Why not just do it in the request?</h2>
+<p>A user signs up. You validate, save them, then send a verification email through a provider like Resend, Mailgun or Brevo, which means calling <em>someone else's</em> server. If that provider is slow or down:</p>
+<ul>
+  <li>Without careful error handling, <strong>the whole signup fails</strong> because of an email.</li>
+  <li>With error handling, signup succeeds but you tell the user "we sent you an email" when you didn't. They click "resend", and it fails again.</li>
+</ul>
+<figure class="anim" id="fig-sync">
+  <figcaption class="anim-title">Same signup, synchronous vs queued</figcaption>
+</figure>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>At the dry cleaner, you don't stand at the counter while they wash your shirt. You hand it over, get a ticket, and leave. The shop works through tickets in the back and calls you when it's done. Your API should hand out tickets, not make users wait at the counter.</p></aside>
+
+<h2 id="how">How a task queue works</h2>
+<p>Think of it as a <strong>to-do list for your backend</strong>: your app adds items, and workers tick them off.</p>
+<figure class="anim" id="fig-queue">
+  <figcaption class="anim-title">Producer → broker → worker, with retries</figcaption>
+</figure>
+<div class="cards">
+  <div class="card"><h4>Producer</h4><p>Your application code. It <strong>serializes</strong> everything the job needs (user ID, email, code) to JSON and <strong>enqueues</strong> it.</p></div>
+  <div class="card"><h4>Broker (the queue)</h4><p>Holds tasks until a worker is free: <strong>RabbitMQ</strong>, <strong>Redis</strong>, or a managed, multi-region service like <strong>AWS SQS</strong>.</p></div>
+  <div class="card"><h4>Consumer (worker)</h4><p>A <strong>separate process</strong> that watches the queue, <strong>dequeues</strong> a task, deserializes it into native types and runs the handler you registered for that queue.</p></div>
+</div>
+<pre><span class="c">// producer, inside the signup handler (BullMQ, Node.js)</span>
+<span class="k">await</span> emailQueue.add(<span class="s">"send-verification"</span>, { userId, email, code }, {
+  attempts: <span class="n">5</span>, backoff: { type: <span class="s">"exponential"</span>, delay: <span class="n">60_000</span> }
+});
+<span class="k">return</span> res.status(<span class="n">201</span>).json({ message: <span class="s">"Check your inbox"</span> });
+
+<span class="c">// consumer, a separate worker process</span>
+<span class="k">new</span> Worker(<span class="s">"email"</span>, <span class="k">async</span> (job) =&gt; {
+  <span class="k">await</span> emailProvider.send({ to: job.data.email, template: <span class="s">"verify"</span>, code: job.data.code });
+});</pre>
+<p class="muted small">Same idea everywhere: Celery (Python), BullMQ (Node.js), Asynq (Go). Different queues for different jobs (email, push notifications, images) can have their own workers.</p>
+
+<h3>Acknowledgements and visibility timeout</h3>
+<p>When a worker finishes, it sends an <strong>ack</strong> and the broker deletes the task. But what if the worker crashes halfway? While a task is being processed it's hidden from other workers for a <strong>visibility timeout</strong>. No ack in time? The task becomes visible again, so another worker picks it up and nothing gets lost.</p>
+<figure class="anim" id="fig-vis">
+  <figcaption class="anim-title">A crashed worker doesn't lose the task</figcaption>
+</figure>
+<aside class="callout analogy"><div class="tag">Analogy</div><p>It's a library hold shelf. A reserved book waits for you for three days; if you don't collect it, it goes back into circulation for the next person.</p></aside>
+
+<h3>Retries with exponential backoff</h3>
+<p>Failed tasks go back into the queue and are retried with growing gaps (1, 2, 4, 8 minutes…) up to a maximum number of attempts. Big providers rarely stay down for minutes, so the second or third attempt usually succeeds, and the user still gets their email.</p>
+
+<h2 id="examples">What usually runs in the background</h2>
+<div class="cards">
+  <div class="card"><h4>Emails</h4><p>Verification, welcome, password reset: all depend on an external service.</p></div>
+  <div class="card"><h4>Images &amp; video</h4><p>Resize and re-encode uploads into the sizes and formats each device needs.</p></div>
+  <div class="card"><h4>Reports</h4><p>Daily, weekly or monthly PDFs and stats emails, run on a schedule (cron-style jobs).</p></div>
+  <div class="card"><h4>Push notifications</h4><p>Your backend stores each device's token and asks Apple's or Google's push service to deliver. Another external call.</p></div>
+</div>
+
+<h2 id="types">Four kinds of tasks</h2>
+<div class="cards c4">
+  <div class="card"><h4>One-off</h4><p>Triggered by an event: verification email, "you got a message" notification. The most common kind.</p></div>
+  <div class="card"><h4>Recurring</h4><p>Run on a schedule: monthly reports, cleaning up orphaned sessions every few months.</p></div>
+  <div class="card"><h4>Chained</h4><p>Parent → child dependencies; some children can run in parallel.</p></div>
+  <div class="card"><h4>Batch</h4><p>One trigger fans out into many tasks: account deletion, nightly reports for thousands of users.</p></div>
+</div>
+<h3>A chained workflow: publishing a course video</h3>
+<figure class="anim" id="fig-chain">
+  <figcaption class="anim-title">Each task starts only when its parent succeeds</figcaption>
+</figure>
+<h3>A batch task: "delete my account"</h3>
+<p>Deleting everything a user owns (projects, assets, profile, and data spread across shards) could take a minute. Instead, the API enqueues <code>delete-account</code>, responds 200 immediately and logs the user out (often with a grace period). The worker then fans out into smaller deletion tasks and finally emails a confirmation.</p>
+
+<h2 id="design">Designing for real-world scale</h2>
+<div class="cards">
+  <div class="card"><h4>Idempotency</h4><p>Retries <em>will</em> happen, so a task must be safe to run twice. Wrap multi-step work in a transaction so a failure rolls back cleanly and the retry starts from zero.</p></div>
+  <div class="card"><h4>Error handling</h4><p>It all happens in another process, out of sight. Catch, log and let the queue retry.</p></div>
+  <div class="card"><h4>Monitoring</h4><p>Track queue length, successes, failures and why they failed, with tools like Prometheus and Grafana (lesson 18).</p></div>
+  <div class="card"><h4>Scalability</h4><p>Traffic doubles? Add more workers horizontally.</p></div>
+  <div class="card"><h4>Ordering</h4><p>If order matters, make sure your broker and library guarantee it.</p></div>
+  <div class="card"><h4>Rate limiting</h4><p>Don't let 10,000 queued tasks hammer an external API that bills or throttles you.</p></div>
+</div>
+<aside class="callout ok"><div class="tag">Best practices</div><ul>
+  <li><strong>Small, focused tasks.</strong> One job, one responsibility. If step 9 of 10 fails, a big task redoes all 10.</li>
+  <li><strong>Avoid long-running tasks.</strong> Split them into chained or parallel pieces.</li>
+  <li><strong>Log generously</strong> so failures are debuggable and retryable.</li>
+  <li><strong>Alert</strong> on growing queue length and unhealthy workers.</li>
+</ul></aside>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>Background jobs run outside the request–response cycle; the user gets a fast response either way.</li>
+  <li>Offload anything slow or dependent on external services: emails, media processing, reports, push notifications.</li>
+  <li>Producer serializes and enqueues; the broker stores; a worker dequeues, runs the task and acks.</li>
+  <li>Visibility timeouts recover tasks from crashed workers; exponential backoff retries failures.</li>
+  <li>Task shapes: one-off, recurring, chained (parent → child) and batch (fan-out).</li>
+  <li>Make tasks idempotent, small and observable, and scale workers horizontally.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>A worker charges a card, then crashes before acking. The task is retried. What could go wrong, and how do you prevent it?</summary><div><p>The customer gets charged twice. Make the task idempotent, for example by passing an idempotency key to the payment provider or recording "charged" in the same transaction and checking it first.</p></div></details>
+  <details><summary>Why respond 201 before the email is actually sent?</summary><div><p>The account <em>was</em> created. The email is non-critical, slow, external work; the queue guarantees it will be attempted (with retries) without making the user wait or fail.</p></div></details>
+  <details><summary>Encode video → (thumbnails, transcription) → resize thumbnails. Which steps can run in parallel?</summary><div><p>Thumbnail generation and transcription, since both depend only on encoding. Thumbnail resizing must wait for thumbnail generation.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+BD.timeline("#fig-sync", {
+  lanes: ["Sync: API", "Queued: API", "Queued: worker"],
+  total: 3200, unit: "ms", ticks: 4, labelW: 120,
+  legend: [{ k: "server", label: "validate + save" }, { k: "net", label: "call email provider" }, { k: "bad", label: "provider timeout" }, { k: "queue", label: "enqueue" }, { k: "ok", label: "response sent" }],
+  segs: [
+    { lane: 0, s: 0, d: 120, k: "server" }, { lane: 0, s: 120, d: 2900, k: "bad", t: "waiting on email provider…" }, { lane: 0, s: 3020, d: 120, k: "ok" },
+    { lane: 1, s: 0, d: 120, k: "server" }, { lane: 1, s: 120, d: 30, k: "queue" }, { lane: 1, s: 150, d: 80, k: "ok", t: "" },
+    { lane: 2, s: 250, d: 600, k: "bad", t: "fail" }, { lane: 2, s: 2000, d: 500, k: "net", t: "retry ✓" }
+  ],
+  steps: [
+    { to: 230, note: "<b>Queued:</b> validate, save, enqueue a job and respond in ~0.2 s. The user sees \"check your inbox\" right away." },
+    { to: 900, note: "Meanwhile the <b>worker</b> tries to send the email, and the provider is down. The user doesn't notice." },
+    { to: 2500, note: "The worker <b>retries</b> after a backoff and succeeds. The email arrives seconds later." },
+    { to: 3200, note: "<b>Sync:</b> the same request sat blocked for ~3 s on the provider and still failed. Slow, and an awkward error for the user." }
+  ]
+});
+
+BD.flow("#fig-queue", {
+  w: 720, h: 270,
+  nodes: {
+    api: { x: 80, y: 135, label: "API (producer)", sub: "POST /signup", kind: "server", w: 140 },
+    q: { x: 290, y: 135, label: "Broker", sub: "email queue: 0", kind: "queue", w: 140, h: 64 },
+    w1: { x: 490, y: 70, label: "Worker 1", sub: "idle", kind: "server", w: 120 },
+    w2: { x: 490, y: 200, label: "Worker 2", sub: "idle", kind: "server", w: 120 },
+    mail: { x: 655, y: 135, label: "Email API", sub: "Resend", kind: "ext", w: 110 }
+  },
+  edges: [["api", "q"], ["q", "w1"], ["q", "w2"], ["w1", "mail"], ["w2", "mail"]],
+  steps: [
+    { path: ["api", "q"], packet: "{userId, email, code}", set: { q: "email queue: 1" }, hl: ["q"], note: "The producer serializes the job to JSON and <b>enqueues</b> it, then the API responds 201 immediately." },
+    { path: ["q", "w1"], packet: "dequeue", set: { q: "in progress: 1", w1: "sending…" }, hl: ["w1"], note: "Worker 1 <b>dequeues</b> it, deserializes the data and runs the email handler." },
+    { path: ["w1", "mail", "w1"], tone: "bad", packet: "503", bad: ["mail"], set: { q: "in progress: 1", w1: "failed ✕", mail: "down" }, note: "The email provider is down, so the task <b>fails</b>." },
+    { path: ["w1", "q"], tone: "warn", packet: "retry in 1 min", set: { q: "retry #1 at +1m", w1: "idle", mail: "down" }, warn: ["q"], note: "The library puts it back with <b>exponential backoff</b>: retry in 1 min, then 2, 4, 8… up to the limit." },
+    { path: ["q", "w2", "mail"], packet: "attempt 2", set: { q: "in progress: 1", w2: "sending…", mail: "back up" }, hl: ["w2"], note: "A minute later any free worker (here Worker 2) tries again…" },
+    { path: ["w2", "q"], tone: "ok", packet: "ack ✓", ok: ["w2", "mail"], set: { q: "email queue: 0", w2: "done", mail: "sent ✓" }, note: "…it succeeds and <b>acknowledges</b>, so the broker removes the task. The email arrived despite the outage." }
+  ]
+});
+
+BD.flow("#fig-vis", {
+  w: 720, h: 230,
+  nodes: {
+    q: { x: 110, y: 115, label: "Queue", sub: "task: visible", kind: "queue", w: 150, h: 64 },
+    w1: { x: 420, y: 50, label: "Worker 1", sub: "", kind: "server", w: 140 },
+    w2: { x: 420, y: 180, label: "Worker 2", sub: "", kind: "server", w: 140 },
+    done: { x: 640, y: 180, label: "Done", sub: "", kind: "cache", w: 110 }
+  },
+  edges: [["q", "w1"], ["q", "w2"], ["w2", "done"]],
+  steps: [
+    { path: ["q", "w1"], packet: "task", set: { q: "task: hidden (30s timeout)", w1: "processing…" }, hl: ["w1"], note: "Worker 1 takes the task. It's now <b>hidden</b> from other workers for the visibility timeout." },
+    { path: ["w1"], bad: ["w1"], set: { q: "task: hidden (30s timeout)", w1: "crashed ✕ (no ack)" }, note: "Worker 1 crashes mid-task and never sends an acknowledgement." },
+    { path: ["q"], warn: ["q"], set: { q: "timeout → visible again", w1: "crashed ✕ (no ack)" }, note: "The timeout expires with no ack, so the queue makes the task <b>visible again</b>." },
+    { path: ["q", "w2", "done"], tone: "ok", packet: "task", ok: ["w2", "done"], set: { q: "task removed", w1: "crashed ✕ (no ack)", w2: "processed + ack ✓", done: "✓" }, note: "Worker 2 picks it up, finishes and acks. The task was never lost, which is also why tasks must be idempotent." }
+  ]
+});
+
+BD.flow("#fig-chain", {
+  w: 720, h: 260,
+  nodes: {
+    up: { x: 70, y: 130, label: "Video uploaded", sub: "to S3", kind: "client", w: 130 },
+    enc: { x: 240, y: 130, label: "Encode", sub: "1080p · 720p · 480p", kind: "server", w: 150 },
+    th: { x: 445, y: 60, label: "Thumbnails", sub: "generate", kind: "queue", w: 130 },
+    tr: { x: 445, y: 200, label: "Transcribe", sub: "subtitles", kind: "queue", w: 130 },
+    rs: { x: 640, y: 60, label: "Resize thumbs", sub: "per device", kind: "queue", w: 140 }
+  },
+  edges: [["up", "enc"], ["enc", "th"], ["enc", "tr"], ["th", "rs"]],
+  steps: [
+    { path: ["up", "enc"], hl: ["enc"], note: "The instructor's upload finishes, triggering the <b>encode</b> task (several resolutions for different networks and devices)." },
+    { path: [["enc", "th"], ["enc", "tr"]], ok: ["enc"], hl: ["th", "tr"], set: { enc: "done ✓" }, note: "Encoding succeeds, so its children start. <b>Thumbnails</b> and <b>transcription</b> are independent and run in <b>parallel</b>." },
+    { path: ["th", "rs"], ok: ["th"], hl: ["rs", "tr"], set: { enc: "done ✓", th: "done ✓" }, note: "Thumbnails done → <b>resize thumbnails</b> can start. Transcription is still running." },
+    { path: ["rs"], ok: ["enc", "th", "tr", "rs"], set: { enc: "done ✓", th: "done ✓", tr: "done ✓", rs: "done ✓" }, note: "Everything is finished and the video is published. If one child fails, only that task is retried." }
+  ]
+});
+</script>
+</body>
+</html>

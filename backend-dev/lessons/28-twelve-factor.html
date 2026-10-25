@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Twelve-Factor App · Backend Dev</title>
+<meta name="description" content="Twelve rules for apps that deploy anywhere, scale out and stay easy to operate.">
+<script>try{var t=localStorage.getItem("bd-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-lesson="28">
+<header class="topbar">
+  <a class="brand" href="../index.html"><span class="logo">BE</span><span>Backend Dev</span></a>
+  <span class="crumb"></span>
+  <span class="spacer"></span>
+  <button class="icon-btn" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+  <span class="progress-mini"></span>
+</header>
+<div class="wrap">
+<div class="lesson-layout">
+<main>
+<div class="lesson-hero">
+  <div class="eyebrow"><span class="pill">Lesson 27</span><span>Video · 1:33:18</span></div>
+  <h1>The Twelve-Factor App</h1>
+  <p class="lead">Config in environment variables, logs to stdout, stateless processes, servers that bind a port: this course has prescribed many such rules without defending them. Most come from one document: <strong>the Twelve-Factor App</strong>, written in 2011 by the people running Heroku. It's a contract between your app and the platform that runs it, and every modern platform assumes you follow it.</p>
+  <div class="glance"><h4>What you'll learn</h4><ul><li>Why the twelve factors exist: snowflake servers and software erosion</li><li>Codebase, dependencies, config and backing services</li><li>Build, release, run and immutable releases</li><li>Stateless processes, port binding and the process formation</li><li>Disposability and dev/prod parity</li><li>Logs as streams and one-off admin processes</li></ul></div>
+</div>
+<h2 id="why">A contract with the platform</h2>
+<p>The Twelve-Factor App states what must be true about your app so that <strong>any machine, any platform and any new teammate</strong> can run it, scale it and update it without surprises. Heroku, Docker, Kubernetes, Render, Railway, Fly, Cloud Run, App Runner, Vercel and Netlify all assume it, directly or indirectly. Many of its rules are now so standard that people follow them without knowing their source.</p>
+<p>Scope: apps that run as a <strong>network service</strong> (web apps, APIs), in any language with any database. It's about the interface between app and platform, not general good practice like DRY or KISS.</p>
+<h3>The world it was written for</h3>
+<p>In 2011, deploying meant renting a server (or keeping one in the office), installing the OS, runtime and database by hand, copying code over FTP and editing config files over SSH. Each server was a hand-built <strong>snowflake</strong>, impossible to reproduce. A new developer needed days to get the app running, and it still didn't match production: "it works on my machine". Teams froze other work on deploy day.</p>
+<aside class="callout analogy"><div class="tag">Software erosion</div><p>The document's name for an app that slowly stops working <em>although nobody changed its code</em>: the OS gets patched, another app on the same server upgrades a shared library, the one person who knew the setup leaves. Like a riverbank washed away grain by grain. The twelve factors are its defences.</p></aside>
+<p>Heroku had watched many thousands of apps deploy, scale and break across languages and frameworks. Co-founder Adam Wiggins wrote the patterns down at 12factor.net. The text stayed nearly frozen (last touched in 2017) while containers, Kubernetes and serverless arrived. In November 2024, Heroku (now part of Salesforce) <strong>open-sourced it</strong> under neutral governance, with maintainers from AWS and Google Cloud among others. A community rewrite keeps all twelve names but restates each as numbered principles; at the time of the video it was still an unmerged draft. Below, each factor gets the 2011 idea first, then what has changed.</p>
+<div class="cards tf-grid">
+  <a class="card" href="#codebase"><div class="k">I</div><h4>Codebase</h4></a>
+  <a class="card" href="#dependencies"><div class="k">II</div><h4>Dependencies</h4></a>
+  <a class="card" href="#config"><div class="k">III</div><h4>Config</h4></a>
+  <a class="card" href="#backing-services"><div class="k">IV</div><h4>Backing services</h4></a>
+  <a class="card" href="#build-release-run"><div class="k">V</div><h4>Build, release, run</h4></a>
+  <a class="card" href="#processes"><div class="k">VI</div><h4>Processes</h4></a>
+  <a class="card" href="#port-binding"><div class="k">VII</div><h4>Port binding</h4></a>
+  <a class="card" href="#concurrency"><div class="k">VIII</div><h4>Concurrency</h4></a>
+  <a class="card" href="#disposability"><div class="k">IX</div><h4>Disposability</h4></a>
+  <a class="card" href="#parity"><div class="k">X</div><h4>Dev/prod parity</h4></a>
+  <a class="card" href="#logs"><div class="k">XI</div><h4>Logs</h4></a>
+  <a class="card" href="#admin"><div class="k">XII</div><h4>Admin processes</h4></a>
+</div>
+
+<h2 id="codebase">I. One codebase, many deploys</h2>
+<p>Version control sounds obvious now, but in 2011 production code could be a folder on someone's machine or <code>final_v2_REALLY_final.zip</code>. The subtler half is <strong>many deploys</strong>: production, staging, per-PR previews, your laptop. All run the <em>same codebase</em>, possibly at different commits. What makes them differ is never code; it's <strong>config</strong>.</p>
+<figure class="anim" data-steps id="fig-commits">
+  <figcaption class="anim-title">Four deploys, one codebase</figcaption>
+  <div class="frame" data-note="Monday: production runs commit 97 (Friday's deploy), staging runs 99 (being tested), and your laptop runs 100 plus two unpushed commits.">
+    <div class="commits">
+      <div class="c"><i></i><span>96</span></div>
+      <div class="c"><i></i><span>97</span><b class="chip ok">production</b></div>
+      <div class="c"><i></i><span>98</span></div>
+      <div class="c"><i></i><span>99</span><b class="chip warn">staging</b></div>
+      <div class="c"><i></i><span>100</span></div>
+      <div class="c local"><i></i><span>101</span></div>
+      <div class="c local"><i></i><span>102</span><b class="chip acc">your laptop</b></div>
+    </div>
+  </div>
+  <div class="frame" data-note="Deploy day: staging moves to 100, then production does. Nothing about the deploys changed except which commit of the same repository each one runs.">
+    <div class="commits">
+      <div class="c"><i></i><span>96</span></div>
+      <div class="c"><i></i><span>97</span></div>
+      <div class="c"><i></i><span>98</span></div>
+      <div class="c"><i></i><span>99</span></div>
+      <div class="c"><i></i><span>100</span><b class="chip ok">production</b><b class="chip warn">staging</b></div>
+      <div class="c local"><i></i><span>101</span></div>
+      <div class="c local"><i></i><span>102</span><b class="chip acc">your laptop</b></div>
+    </div>
+  </div>
+</figure>
+<p>Two boundaries: several codebases make a distributed system (each app follows the factors on its own), and the <em>same</em> code copy-pasted into two apps is a violation; extract it into a library pulled in as a dependency. <strong>Monorepos are fine</strong>: a repo that builds five apps is five codebases sharing a repository. The anti-pattern is one app living in two places.</p>
+
+<h2 id="dependencies">II. Explicitly declare and isolate dependencies</h2>
+<p><strong>Declare:</strong> a manifest lists every library the app needs (<code>package.json</code>, <code>go.mod</code>, <code>pyproject.toml</code> or <code>requirements.txt</code>, <code>Gemfile</code>), so setup is one command instead of days of guessing versions from import statements. Today's <strong>lockfiles</strong> (<code>package-lock.json</code>, <code>go.sum</code>) go further, pinning the exact version of every library and every library <em>they</em> depend on, so a build years later pulls identical code.</p>
+<p><strong>Isolate:</strong> declaring is useless if the app quietly uses whatever the machine has. Your manifest says <code>requests</code> v2, but the system Python already has v1 and the import finds that first. The same goes for system tools: shelling out to ImageMagick runs <code>magick</code> (v7, via Homebrew) on your Mac and <code>convert</code> (v6, via apt, with different defaults) on the Ubuntu server. In 2011 the answer was <code>bundle exec</code>, <code>virtualenv</code> and vendoring.</p>
+<p><span class="chip ok">Then → now</span> <strong>Containers</strong> freeze not just libraries but the OS, system tools and runtime too: the strongest declaration and isolation possible. People say Docker practically solved this factor.</p>
+
+<h2 id="config">III. Store config in the environment</h2>
+<p><strong>Config</strong> is everything likely to differ between deploys: the database URL (a local container vs Amazon RDS), the email provider (sandbox vs live), object storage (MinIO vs S3), Redis, credentials. It must live outside the code. The document's test:</p>
+<aside class="callout note"><div class="tag">The open-source test</div><p>Could you open-source your codebase <strong>right now</strong> without leaking a single credential? Not <em>would</em> you, but <em>could</em> you. If not, config is hiding in your code.</p></aside>
+<p>Why environment variables? They change per deploy without editing files, can't be committed by accident (the classic way credentials leak), and they're an OS standard that works identically for Go, Node, Rust, Python or a bash script, unlike Java <code>.properties</code> files or Rails' <code>config/database.yml</code>, which kept ending up in repositories. The course's task app loads ~38 values, from server port to AWS settings, from <code>TASKER_</code>-prefixed variables into one config struct (lesson 17): config changed constantly over its history; the code reading it barely did.</p>
+<div class="split">
+<pre><span class="c"># ✕ named environments: every new deploy needs new code</span>
+config/environments/development.rb
+config/environments/staging.rb
+config/environments/production.rb
+config/environments/staging-but-other-db.rb  <span class="c"># …and so on</span></pre>
+<pre><span class="c"># ✓ granular, independent variables: compose a deploy by setting values</span>
+DATABASE_URL=postgres://…@pr-481-db:5432/app
+REDIS_URL=redis://cache:6379
+EMAIL_PROVIDER=sandbox
+LOG_LEVEL=debug</pre>
+</div>
+<aside class="callout warn"><div class="tag">The secrets debate</div><p>Environment variables are perfect for hostnames, but for passwords? In 2017 Diogo Mónica, then head of security at Docker, argued no: child processes inherit the whole environment, crash reporters and debug pages print it, and on Linux it's readable at <code>/proc/&lt;pid&gt;/environ</code>. The safer pattern is a <strong>secret manager</strong> (Vault, AWS Secrets Manager or Parameter Store) read at startup, held in memory, rotated and audited. For a solo developer or small team, platform-injected secret variables are fine, and far better than committed credentials.</p></aside>
+
+<h2 id="backing-services">IV. Treat backing services as attached resources</h2>
+<p>A <strong>backing service</strong> is anything your app uses over the network: Postgres, Redis, a queue, SMTP, S3, a payment API. The rule: your code makes <strong>no distinction</strong> between one you run and one someone else runs. Each is an attached resource reached through a <strong>resource handle</strong> (a URL plus credentials) stored in config.</p>
+<figure class="anim" id="fig-handle">
+  <figcaption class="anim-title">Try it: swap the database without touching code</figcaption>
+  <div class="widget">
+    <div class="row presets" id="rh-btns"><button type="button" data-k="local">Local container</button><button type="button" data-k="neon">Neon</button><button type="button" data-k="rds">Amazon RDS</button></div>
+    <div class="url-anatomy" id="rh-url"></div>
+    <p class="small muted" style="margin:6px 0 10px"><span class="chip">scheme (wire protocol)</span> <span class="chip warn">credentials</span> <span class="chip acc">host</span> <span class="chip">port</span> <span class="chip">database</span></p>
+<pre><span class="k">const</span> db = <span class="k">new</span> Pool({ connectionString: process.env.DATABASE_URL });
+<span class="c">// lines of code changed: 0</span></pre>
+  </div>
+</figure>
+<p><span class="chip ok">Then → now</span> In 2011, "the database is somebody else's computer and your app just has its URL" was eccentric; most people ran the app and database on one box. Today managed Postgres (RDS, Neon, PlanetScale, Supabase), managed Redis, S3 and email APIs like Resend are the norm, and app and database on the same server counts as an anti-pattern for scaling. This factor was practically a prediction.</p>
+
+<h2 id="build-release-run">V. Strictly separate build, release and run</h2>
+<figure class="anim" id="fig-brr">
+  <figcaption class="anim-title">From commit to running process</figcaption>
+</figure>
+<p>A <strong>build</strong> contains code and dependencies, never config. A <strong>release</strong> is an exact build plus an exact config: the same image with production config is the production release; with staging config, the staging release. Releases form an <strong>append-only ledger</strong>: each gets an ID and is never modified.</p>
+<figure class="anim" id="fig-ledger">
+  <figcaption class="anim-title">Try it: a bad deploy and an instant rollback</figcaption>
+  <div class="widget">
+    <div class="row"><button type="button" class="act" id="lg-roll">Roll back to v101</button><button type="button" class="ghost" id="lg-reset">Reset</button></div>
+    <div class="table-wrap"><table id="lg-table"></table></div>
+    <div class="out" id="lg-out"></div>
+  </div>
+</figure>
+<p>Two payoffs. <strong>Rollbacks are instant and safe</strong>, because v101 still means exactly what it meant two hours ago: fix production in seconds, then debug the bad build at leisure. Heroku releases, Docker image tags and Kubernetes rollouts all work this way. And <strong>nobody can edit code on a production server</strong>: code enters only at the build stage, so the snowflake-era SSH hot patch, the reason production and the repository used to drift apart, has no path back in. The rewrite makes "every release is a unique, immutable snapshot" an explicit principle.</p>
+
+<h2 id="processes">VI. Execute the app as stateless processes</h2>
+<p><strong>Share nothing:</strong> processes keep no memory or disk state between requests; anything that must persist goes to a backing service. Assume any process can serve any request and any process can vanish at any moment. Memory or a temp file used within a single request is fine; nothing later may rely on it.</p>
+<p>The document calls <strong>sticky sessions</strong> (the load balancer pinning each user to one instance so in-memory sessions keep working) a violation. They defeat the point of several instances: kill one and its users are logged out; add one and it gets no existing users. Sessions are state; put them in Redis or Postgres (lesson 21.2).</p>
+<p>The honest exception: a WebSocket <em>is</em> state held in one process (lesson 25), which is why real-time systems lean on pub/sub. Treat statelessness as the default and break it only when the feature itself is the state.</p>
+<aside class="callout ok"><div class="tag">Rule of thumb</div><p>If you can't kill any process at any moment without a user losing data, there's state somewhere it doesn't belong.</p></aside>
+
+<h2 id="port-binding">VII. Export services via port binding</h2>
+<p>In 2011 a PHP app didn't run itself; Apache ran, with PHP loaded as a module. A Java app was a file dropped into Tomcat's folder. The web server's version and config were part of the app's environment, living on the physical server: erosion again. The factor says the app must be <strong>self-contained</strong>: bring its own HTTP server as a declared dependency and <strong>bind a port</strong> (<code>:8080</code>, <code>:4000</code>), with a routing layer in front in production.</p>
+<p>A neat consequence: anything that binds a port can be a backing service for anything else. Your database, cache and mail catcher run on local ports in development; in production the handles point at someone else's ports in the cloud. Same pattern throughout.</p>
+<p><span class="chip warn">Then → now</span> Serverless functions don't bind ports; the platform calls an exported function. The rewrite keeps port binding as the headline but generalises it: the app is self-contained and exports its service through a <strong>declared interface</strong>, covering both long-running servers and functions.</p>
+
+<h2 id="concurrency">VIII. Scale out via the process model</h2>
+<p>Runtimes once scaled in their own ways: the JVM grabbed a huge block of memory at startup and multiplexed threads inside; Apache spawned PHP child processes on demand. Borrowing from Unix service daemons, the factor makes the <strong>process</strong> the unit of scale, with a <strong>process type</strong> per kind of work: <code>web</code> for HTTP, <code>worker</code> for background jobs like video encoding, <code>clock</code> for schedules. Each type scales on its own; the types and counts together are the <strong>process formation</strong>.</p>
+<figure class="anim" id="fig-formation">
+  <figcaption class="anim-title">Try it: a food-delivery app's formation (each part ~500 MB)</figcaption>
+  <div class="widget">
+    <div class="row presets" id="pf-time"><button type="button" data-t="lunch">Lunch rush</button><button type="button" data-t="night">Night batch jobs</button></div>
+    <div class="row"><label><input type="checkbox" id="pf-split" checked> Separate process types</label></div>
+    <div id="pf-viz"></div>
+    <div class="tiles" id="pf-tiles"></div>
+  </div>
+</figure>
+<div class="split">
+<pre><span class="c"># Procfile (Heroku, Overmind, Foreman)</span>
+<span class="k">web</span>:     ./tasker serve
+<span class="k">worker</span>:  ./tasker jobs
+<span class="k">release</span>: ./tasker migrate</pre>
+<pre><span class="c"># Kubernetes: the same idea in YAML</span>
+<span class="k">kind</span>: Deployment
+<span class="k">metadata</span>: { name: web }
+<span class="k">spec</span>:
+  <span class="k">replicas</span>: <span class="n">10</span>   <span class="c"># ← the formation</span></pre>
+</div>
+<p>Threads, goroutines and event loops inside a process are fine (lesson 22), but scale by adding processes, because a share-nothing process spreads across machines while one machine only grows so far. And a twelve-factor app never daemonizes or writes PID files; it runs in the foreground and lets the platform (systemd, Kubernetes) manage its lifecycle. <span class="chip ok">Then → now</span> Orchestrators made this so universal that it's invisible: you declare a formation, and the platform keeps it running.</p>
+
+<h2 id="disposability">IX. Maximize robustness with fast startup and graceful shutdown</h2>
+<p>Processes must be <strong>disposable</strong>: startable and stoppable at a moment's notice. Stopping is routine now: deploy 5 times a week to 10 instances and that's 50 stops and 50 starts before any autoscaling.</p>
+<ul>
+  <li><strong>Fast startup:</strong> a 60-second boot makes a rolling deploy of 10 instances take 10 minutes and leaves the autoscaler a minute late to every spike. Aim for a few seconds.</li>
+  <li><strong>Graceful shutdown</strong> on <code>SIGTERM</code> (lesson 19): web processes stop accepting requests, finish in-flight ones, then exit; workers return their current job to the queue.</li>
+  <li><strong>Re-entrancy:</strong> a returned job will run again, so it must leave no half-done state: wrap it in a transaction or make it <strong>idempotent</strong>.</li>
+  <li><strong>Sudden death:</strong> an out-of-memory kill gives no warning. The document points to <strong>crash-only design</strong>: if your app survives a crash at any instruction, the crash path <em>is</em> the shutdown path.</li>
+</ul>
+
+<h2 id="parity">X. Keep development, staging and production as similar as possible</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Gap</th><th>Traditional app</th><th>Twelve-factor app</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Time</strong></td><td>Weeks between writing and deploying, many changes at once</td><td>Hours</td></tr>
+    <tr><td><strong>Personnel</strong></td><td>Developers write, ops engineers deploy and read the errors</td><td>The people who write it deploy it and watch its logs</td></tr>
+    <tr><td><strong>Tools</strong></td><td>Different stacks: a Mac with SQLite locally, Linux with Postgres in production</td><td>As similar as possible</td></tr>
+  </tbody>
+</table></div>
+<p>The tools gap is the one that survives. ORMs (Prisma, Drizzle, GORM, SQLAlchemy) make it tempting to develop on SQLite and run Postgres in production, and the differences bite silently, with no error and no log:</p>
+<figure class="anim" id="fig-like">
+  <figcaption class="anim-title">Try it: the same search on SQLite and Postgres</figcaption>
+  <div class="widget">
+    <div class="row"><label style="flex:1"><code>WHERE name LIKE</code> <input type="text" id="lk-pat" value="mac%" style="flex:1;font-family:var(--mono)"></label></div>
+    <div class="lanes3" id="lk-out"></div>
+  </div>
+</figure>
+<p>Use the same backing services everywhere; a container is one command away. Managed services reopen the gap: AWS DynamoDB is proprietary, and LocalStack only emulates its documented behaviour. If a managed service's benefits are large, accept the gap knowingly.</p>
+
+<h2 id="logs">XI. Treat logs as event streams</h2>
+<p>A log file was never the log; it's one possible output. The log is a <strong>time-ordered stream of events</strong> flowing as long as the app runs. So the app shouldn't route or store it, manage file paths or rotate files: write every event, unbuffered, to <strong>stdout</strong>, and let the environment capture and route it. In 2011 that meant syslog; today Loki or Datadog (lesson 18).</p>
+<figure class="anim" id="fig-logs">
+  <figcaption class="anim-title">Three instances, one stream</figcaption>
+</figure>
+<p>Changing where logs go becomes a config change, not a code change, and streams compose: your terminal shows them live, a container runtime stamps them with their source, and the platform merges all instances into one time-ordered stream. Metrics and traces weren't common practice in 2011; treat them as additions, not contradictions.</p>
+
+<h2 id="admin">XII. Run admin tasks as one-off processes</h2>
+<p>Migrations, data fixes and scripts run as <strong>one-off processes</strong> next to the app, in an <strong>identical environment</strong>: same codebase, same commit (shipped with the release), same config, same dependency isolation. The old way was SSHing into a production server and typing an <code>UPDATE</code>: no review, no record, and production silently drifting from the code. Database migrations that ship with the code and run before the app starts are the classic example; Heroku even has a <code>release</code> process type for them.</p>
+<aside class="callout note"><div class="tag">All together</div><p>The task app on a Linux box, driven by a Procfile and the Overmind process manager: on boot it checks the schema, starts the job server and binds its assigned port, logging to stdout. A one-off auto-archive command runs from the same code and config, then exits. Ctrl-C closes the connection pool, waits for workers to finish their jobs and exits cleanly: factors VIII, IX and XII in one terminal.</p></aside>
+
+<h2 id="summary">The factors, aged</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Factor</th><th>Status today</th><th>In this course</th></tr></thead>
+  <tbody>
+    <tr><td>I. Codebase</td><td>Universal; monorepos compatible</td><td><a href="31-devops.html">30</a></td></tr>
+    <tr><td>II. Dependencies</td><td>Lockfiles and containers made it stronger</td><td><a href="31-devops.html">30</a></td></tr>
+    <tr><td>III. Config</td><td>Core rule intact; secrets belong in a secret manager</td><td><a href="17-config.html">17</a></td></tr>
+    <tr><td>IV. Backing services</td><td>Aged like a prediction</td><td><a href="24-object-storage-1.html">23</a></td></tr>
+    <tr><td>V. Build, release, run</td><td>Immutability now explicit</td><td><a href="31-devops.html">30</a></td></tr>
+    <tr><td>VI. Processes</td><td>Default; real-time is the known exception</td><td><a href="22-scaling-2.html">21.2</a>, <a href="26-real-time.html">25</a></td></tr>
+    <tr><td>VII. Port binding</td><td>Generalised to "declared interface" for serverless</td><td><a href="22-scaling-2.html">21.2</a></td></tr>
+    <tr><td>VIII. Concurrency</td><td>Absorbed by orchestrators</td><td><a href="23-concurrency.html">22</a></td></tr>
+    <tr><td>IX. Disposability</td><td>Essential with frequent deploys</td><td><a href="19-graceful-shutdown.html">19</a></td></tr>
+    <tr><td>X. Dev/prod parity</td><td>Tools gap persists with managed services</td><td><a href="27-testing.html">26</a></td></tr>
+    <tr><td>XI. Logs</td><td>Extended by metrics and traces</td><td><a href="18-observability.html">18</a></td></tr>
+    <tr><td>XII. Admin processes</td><td>Migrations in the release pipeline</td><td><a href="12-postgres.html">12</a></td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="takeaways">Key takeaways</h2>
+<ul class="takeaways">
+  <li>The twelve factors are a contract between app and platform, written to stop snowflake servers and software erosion. Every modern platform assumes them.</li>
+  <li>One codebase, many deploys; deploys differ only by config. Declare and isolate dependencies; containers finish the job.</li>
+  <li>Config lives in the environment (pass the open-source test); secrets go to a secret manager as you grow. Backing services are attached via URLs.</li>
+  <li>Build, release, run: immutable builds plus config make an append-only ledger of releases and instant rollbacks.</li>
+  <li>Stateless, share-nothing processes that bind a port, scale by process type, start fast, shut down gracefully and survive crashes.</li>
+  <li>Keep dev and prod alike, especially backing services. Logs go unbuffered to stdout. Admin tasks run as one-off processes from the same release.</li>
+</ul>
+
+<h2 id="quiz">Check yourself</h2>
+<div class="quiz">
+  <details><summary>Your staging and production differ by an <code>if (env === "production")</code> branch that picks a different database. Which factor does this break, and what's the fix?</summary><div><p>Factor III (and I): deploys should differ by config, not code. Read <code>DATABASE_URL</code> from the environment and drop the branch; any new deploy is then just a new set of values.</p></div></details>
+  <details><summary>A bad deploy is throwing errors. Why can a twelve-factor app recover in seconds?</summary><div><p>Releases are immutable build + config snapshots in an append-only ledger. Rolling back re-runs a previous release whose build already exists; nothing needs rebuilding. Debug the bad one afterwards.</p></div></details>
+  <details><summary>Your app scales to 10 instances at lunch, but most of the memory goes to background-job code that's idle. What should change?</summary><div><p>Split process types (web, worker) so each scales independently: 10 web and 2 workers at lunch, the reverse at night.</p></div></details>
+  <details><summary>Search works locally but returns fewer results in production. Development uses SQLite, production Postgres. A likely cause?</summary><div><p>SQLite's <code>LIKE</code> is case-insensitive for ASCII; Postgres's is case-sensitive (use <code>ILIKE</code> or <code>lower()</code>). Factor X: use the same backing service in development.</p></div></details>
+  <details><summary>Why shouldn't your app write its own rotating log files?</summary><div><p>Factor XI: the app's job is to emit an unbuffered event stream to stdout. Routing, storage and rotation belong to the platform, so they change through config, and streams from many instances can be merged.</p></div></details>
+</div>
+</main>
+<aside class="toc" aria-label="On this page"></aside>
+</div>
+</div>
+<script src="../assets/lessons.js"></script>
+<script src="../assets/app.js"></script>
+<script>
+(function () {
+  var H = {
+    local: ["postgres://", "app:devpass", "@", "localhost", ":5432", "/tasker", ""],
+    neon: ["postgres://", "app:•••••••", "@", "ep-cool-river-123.us-east-2.aws.neon.tech", ":5432", "/tasker", "?sslmode=require"],
+    rds: ["postgres://", "app:•••••••", "@", "tasker.c9akciq32.us-east-1.rds.amazonaws.com", ":5432", "/tasker", ""]
+  };
+  var url = document.getElementById("rh-url");
+  function show(k) {
+    var p = H[k];
+    url.innerHTML = '<span class="u-static">' + p[0] + '</span><span class="u-query">' + p[1] + '</span><span class="u-static">' + p[2] + '</span><span class="u-param">' + p[3] + '</span><span class="u-static">' + p[4] + '</span><span class="u-static">' + p[5] + "</span>" + (p[6] ? '<span class="u-static">' + p[6] + "</span>" : "");
+    Array.prototype.forEach.call(document.querySelectorAll("#rh-btns button"), function (b) { var on = b.getAttribute("data-k") === k; b.style.borderColor = on ? "var(--accent)" : ""; b.style.color = on ? "var(--accent)" : ""; });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("#rh-btns button"), function (b) { b.addEventListener("click", function () { show(b.getAttribute("data-k")); }); });
+  show("local");
+})();
+
+BD.flow("#fig-brr", {
+  w: 720, h: 250,
+  nodes: {
+    git: { x: 75, y: 70, label: "Commit 97", sub: "git", kind: "client", w: 120 },
+    build: { x: 270, y: 70, label: "Build", sub: "", kind: "server", w: 150 },
+    cfg: { x: 270, y: 190, label: "Config", sub: "production", kind: "cache", w: 150 },
+    rel: { x: 475, y: 130, label: "Release", sub: "", kind: "queue", w: 205 },
+    run: { x: 650, y: 130, label: "Run", sub: "", kind: "server", w: 125 }
+  },
+  edges: [["git", "build"], ["build", "rel"], ["cfg", "rel"], ["rel", "run"]],
+  steps: [
+    { path: ["git", "build"], hl: ["build"], set: { build: "image a1b2c3" }, note: "<b>Build:</b> fetch the code at one commit, install dependencies from the lockfile, compile: one executable bundle or container image. Code and dependencies only, <b>no config</b>." },
+    { path: [["build", "rel"], ["cfg", "rel"]], hl: ["rel"], set: { build: "image a1b2c3", rel: "v100 = a1b2c3 + prod config" }, note: "<b>Release:</b> combine that exact build with one deploy's config and give it an ID." },
+    { path: ["rel", "run"], tone: "ok", ok: ["run"], set: { build: "image a1b2c3", rel: "v100 = a1b2c3 + prod config", run: "web×3 · worker×2" }, note: "<b>Run:</b> launch processes from the release. Nothing flows backwards: there's no path from a running server into the build." }
+  ]
+});
+
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var base, cur;
+  function reset() {
+    base = [
+      { v: 100, build: "a1b2c3 (commit 97)", cfg: "config v7", why: "deploy commit 97", ok: true },
+      { v: 101, build: "a1b2c3 (commit 97)", cfg: "config v8", why: "DB password rotated", ok: true },
+      { v: 102, build: "f9e8d7 (commit 102)", cfg: "config v8", why: "deploy commit 102", ok: false }
+    ];
+    cur = 102; $("lg-roll").disabled = false; render();
+    $("lg-out").innerHTML = '<span class="verdict bad">v102 is live and returning errors; users are complaining.</span>';
+  }
+  function render() {
+    $("lg-table").innerHTML = "<thead><tr><th>Release</th><th>Build</th><th>Config</th><th>Why</th><th></th></tr></thead><tbody>" + base.map(function (r) {
+      return "<tr><td><b>v" + r.v + "</b></td><td><code>" + r.build + "</code></td><td>" + r.cfg + "</td><td>" + r.why + "</td><td>" + (r.v === cur ? '<span class="chip ' + (r.ok ? "ok" : "bad") + '">live' + (r.ok ? "" : " · errors") + "</span>" : "") + "</td></tr>";
+    }).join("") + "</tbody>";
+  }
+  $("lg-roll").addEventListener("click", function () {
+    base.push({ v: 103, build: "a1b2c3 (commit 97)", cfg: "config v8", why: "rollback to v101", ok: true });
+    cur = 103; $("lg-roll").disabled = true; render();
+    $("lg-out").innerHTML = '<span class="verdict ok">Live again in seconds: the v101 build already existed, so nothing was rebuilt.</span> The rollback is itself a <b>new</b> release (v103); history is never rewritten.';
+  });
+  $("lg-reset").addEventListener("click", reset);
+  reset();
+})();
+
+(function () {
+  var T = { lunch: { web: 10, worker: 2 }, night: { web: 5, worker: 20 } };
+  var t = "lunch", split = document.getElementById("pf-split");
+  function blocks(n, cls, label) { var s = ""; for (var i = 0; i < n; i++) s += '<span class="pf ' + cls + '"></span>'; return '<div class="pf-row"><b>' + label + "</b><div>" + s + "</div></div>"; }
+  function render() {
+    var f = T[t], viz = document.getElementById("pf-viz"), ram, idle = 0;
+    if (split.checked) {
+      viz.innerHTML = blocks(f.web, "web", "web × " + f.web) + blocks(f.worker, "worker", "worker × " + f.worker);
+      ram = (f.web + f.worker) * 0.5;
+    } else {
+      var n = Math.max(f.web, f.worker);
+      viz.innerHTML = blocks(n, "both", "web+worker × " + n);
+      ram = n * 1; idle = (n - f.web) * 0.5 + (n - f.worker) * 0.5;
+    }
+    document.getElementById("pf-tiles").innerHTML = '<div class="tile ' + (idle ? "bad" : "ok") + '"><small>Memory in use</small><b>' + ram + ' GB</b></div><div class="tile ' + (idle ? "bad" : "") + '"><small>Spent on idle code</small><b>' + idle + " GB</b></div>";
+    Array.prototype.forEach.call(document.querySelectorAll("#pf-time button"), function (b) { var on = b.getAttribute("data-t") === t; b.style.borderColor = on ? "var(--accent)" : ""; b.style.color = on ? "var(--accent)" : ""; });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("#pf-time button"), function (b) { b.addEventListener("click", function () { t = b.getAttribute("data-t"); render(); }); });
+  split.addEventListener("change", render);
+  render();
+})();
+
+(function () {
+  var ROWS = ["MacBook Pro", "macbook air", "iMac 24", "Magic Mouse", "mac mini"];
+  var inp = document.getElementById("lk-pat"), out = document.getElementById("lk-out");
+  function rx(p, ci) { var s = p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/%/g, ".*").replace(/_/g, "."); return new RegExp("^" + s + "$", ci ? "i" : ""); }
+  function esc(s) { return s.replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); }
+  function col(title, ci, note) {
+    var r = rx(inp.value, ci), hits = ROWS.filter(function (x) { return r.test(x); });
+    return "<div><h5>" + title + "</h5><pre>" + (hits.length ? hits.map(esc).join("\n") : '<span class="c">(no rows)</span>') + '</pre><p class="small muted" style="margin:6px 0 0">' + note + "</p></div>";
+  }
+  function render() {
+    out.innerHTML = col("SQLite · LIKE (dev)", true, "Case-insensitive for ASCII by default.") + col("Postgres · LIKE (prod)", false, "Case-sensitive. Same query, fewer results, no error.") + col("Postgres · ILIKE", true, "The case-insensitive operator you actually wanted.");
+  }
+  inp.addEventListener("input", render); render();
+})();
+
+BD.flow("#fig-logs", {
+  w: 720, h: 280,
+  nodes: {
+    i1: { x: 85, y: 50, label: "web.1", sub: "stdout", kind: "server", w: 120 },
+    i2: { x: 85, y: 140, label: "web.2", sub: "stdout", kind: "server", w: 120 },
+    i3: { x: 85, y: 230, label: "worker.1", sub: "stdout", kind: "server", w: 120 },
+    p: { x: 340, y: 140, label: "Platform log router", sub: "", kind: "net", w: 190 },
+    t: { x: 610, y: 70, label: "Your terminal", sub: "", kind: "client", w: 150 },
+    d: { x: 610, y: 210, label: "Loki / Datadog", sub: "", kind: "db", shape: "cyl", w: 150, h: 64 }
+  },
+  edges: [["i1", "p"], ["i2", "p"], ["i3", "p"], ["p", "t"], ["p", "d"]],
+  steps: [
+    { path: [["i1", "p"], ["i2", "p"], ["i3", "p"]], packet: "event", set: { p: "capture + stamp source" }, note: "Each process just writes events, unbuffered, to stdout. No file paths, no rotation, no idea where they end up." },
+    { path: [["p", "t"], ["p", "d"]], tone: "ok", ok: ["t", "d"], set: { p: "merge, ordered by time", t: "live tail", d: "search + retention" }, note: "The platform stamps each line with its source, merges all instances into one time-ordered stream, and routes it: to your terminal, a log drain, or both. Changing that is config, not code." }
+  ]
+});
+</script>
+</body>
+</html>
