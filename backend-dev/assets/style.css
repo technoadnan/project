@@ -516,3 +516,14 @@ pre mark { background: var(--accent-soft); color: inherit; border-radius: 4px; p
 .ec.p { border-color: var(--accent); background: var(--accent-soft); }
 .ec.dead { border-style: dashed; border-color: var(--bad); background: var(--bad-soft); color: var(--bad); }
 @media (max-width: 600px) { .ec-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.up-grid { display: grid; grid-template-columns: repeat(25, minmax(0, 1fr)); gap: 3px; margin-top: 10px; }
+.up-grid span { aspect-ratio: 1; border-radius: 3px; background: var(--surface-2); border: 1px solid var(--border); transition: background .2s; }
+.up-grid span.fly { background: var(--accent); border-color: var(--accent); animation: up-pulse 1s ease-in-out infinite; }
+.up-grid span.done { background: var(--ok); border-color: var(--ok); }
+.up-grid span.fail { background: var(--bad); border-color: var(--bad); }
+@keyframes up-pulse { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .up-grid span.fly { animation: none; } }
+.rg-bar { display: flex; height: 18px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+.rg-bar .skip { background: repeating-linear-gradient(135deg, var(--surface-2) 0 6px, var(--surface) 6px 12px); }
+.rg-bar .get { background: var(--accent); }
+@media (max-width: 600px) { .up-grid { grid-template-columns: repeat(15, minmax(0, 1fr)); } }
